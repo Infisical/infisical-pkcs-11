@@ -1,0 +1,185 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: write
+
+jobs:
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Run tests
+        run: go test -v -race ./...
+
+      - name: Vet
+        run: go vet ./...
+
+  build-linux:
+    name: Build Linux (${{ matrix.arch }})
+    needs: test
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - arch: amd64
+            cc: x86_64-linux-musl-gcc
+            musl_pkg: musl-tools
+            output: libinfisical-pkcs11-linux-amd64.so
+          - arch: arm64
+            cc: aarch64-linux-musl-gcc
+            musl_pkg: gcc-aarch64-linux-gnu musl-tools
+            output: libinfisical-pkcs11-linux-arm64.so
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Install cross-compiler
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ${{ matrix.musl_pkg }}
+          # For arm64, install the musl cross-compiler
+          if [ "${{ matrix.arch }}" = "arm64" ]; then
+            wget -q https://musl.cc/aarch64-linux-musl-cross.tgz
+            tar xzf aarch64-linux-musl-cross.tgz
+            echo "$PWD/aarch64-linux-musl-cross/bin" >> $GITHUB_PATH
+          fi
+
+      - name: Build
+        env:
+          CGO_ENABLED: "1"
+          GOOS: linux
+          GOARCH: ${{ matrix.arch }}
+          CC: ${{ matrix.cc }}
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          go build -buildmode=c-shared \
+            -ldflags="-s -w -X main.version=$VERSION" \
+            -o ${{ matrix.output }}
+
+      - name: Create archive
+        run: |
+          tar czf ${{ matrix.output }}.tar.gz ${{ matrix.output }}
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.output }}
+          path: ${{ matrix.output }}.tar.gz
+
+  build-darwin:
+    name: Build macOS (${{ matrix.arch }})
+    needs: test
+    runs-on: macos-latest
+    strategy:
+      matrix:
+        include:
+          - arch: amd64
+            output: libinfisical-pkcs11-darwin-amd64.dylib
+          - arch: arm64
+            output: libinfisical-pkcs11-darwin-arm64.dylib
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Build
+        env:
+          CGO_ENABLED: "1"
+          GOOS: darwin
+          GOARCH: ${{ matrix.arch }}
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          go build -buildmode=c-shared \
+            -ldflags="-s -w -X main.version=$VERSION" \
+            -o ${{ matrix.output }}
+
+      - name: Create archive
+        run: |
+          tar czf ${{ matrix.output }}.tar.gz ${{ matrix.output }}
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.output }}
+          path: ${{ matrix.output }}.tar.gz
+
+  build-windows:
+    name: Build Windows (amd64)
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Install MinGW
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-mingw-w64-x86-64
+
+      - name: Build
+        env:
+          CGO_ENABLED: "1"
+          GOOS: windows
+          GOARCH: amd64
+          CC: x86_64-w64-mingw32-gcc
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          go build -buildmode=c-shared \
+            -ldflags="-s -w -X main.version=$VERSION" \
+            -o libinfisical-pkcs11-windows-amd64.dll
+
+      - name: Create archive
+        run: |
+          zip libinfisical-pkcs11-windows-amd64.dll.zip libinfisical-pkcs11-windows-amd64.dll
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: libinfisical-pkcs11-windows-amd64.dll
+          path: libinfisical-pkcs11-windows-amd64.dll.zip
+
+  release:
+    name: Create Release
+    needs: [build-linux, build-darwin, build-windows]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Collect release files
+        run: |
+          mkdir release
+          find artifacts -type f \( -name '*.tar.gz' -o -name '*.zip' \) -exec mv {} release/ \;
+          ls -la release/
+
+      - name: Generate checksums
+        working-directory: release
+        run: |
+          sha256sum * > checksums-sha256.txt
+          cat checksums-sha256.txt
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: |
+            release/*
