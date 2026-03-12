@@ -1,0 +1,16 @@
+# Build artifacts (go build -buildmode=c-shared outputs)
+*.so
+*.dylib
+*.dll
+*.h
+!pkcs11_types.h
+libinfisical-pkcs11*
+infisical-pkcs11
+infisical-pkcs11.*
+
+# Credentials
+test-config.json
+
+# Misc
+*.zip
+.DS_Store
