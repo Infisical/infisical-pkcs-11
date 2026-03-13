@@ -969,7 +969,8 @@ func (b *InfisicalBackend) signInternal(sess *session, data []byte) ([]byte, err
 	}
 
 	var algorithm string
-	var digestData []byte
+	var signData []byte
+	isDigest := true
 
 	if sess.signMech == pkcs11.CKM_RSA_PKCS {
 		alg, digest, err := parseDigestInfo(data)
@@ -978,7 +979,7 @@ func (b *InfisicalBackend) signInternal(sess *session, data []byte) ([]byte, err
 			return nil, fmt.Errorf("invalid DigestInfo for CKM_RSA_PKCS")
 		}
 		algorithm = alg
-		digestData = digest
+		signData = digest
 	} else if sess.signMech == pkcs11.CKM_ECDSA {
 		// Raw ECDSA: data is a pre-computed hash, detect algorithm from digest length
 		switch len(data) {
@@ -989,22 +990,30 @@ func (b *InfisicalBackend) signInternal(sess *session, data []byte) ([]byte, err
 		default:
 			algorithm = AlgECDSASHA256
 		}
-		digestData = data
+		signData = data
+	} else if isPSSMechanism(sess.signMech) {
+		alg, err := mechanismToAlgorithm(sess.signMech)
+		if err != nil {
+			return nil, err
+		}
+		algorithm = alg
+		signData = data
+		isDigest = false
 	} else {
 		alg, err := mechanismToAlgorithm(sess.signMech)
 		if err != nil {
 			return nil, err
 		}
 		algorithm = alg
-		digestData = hashDataForMechanism(sess.signMech, data)
+		signData = hashDataForMechanism(sess.signMech, data)
 	}
 
 	hostname, _ := os.Hostname()
 
 	req := signRequest{
-		Data:             base64.StdEncoding.EncodeToString(digestData),
+		Data:             base64.StdEncoding.EncodeToString(signData),
 		SigningAlgorithm: algorithm,
-		IsDigest:         true,
+		IsDigest:         isDigest,
 		ClientMetadata: map[string]interface{}{
 			"tool":     "pkcs11-module",
 			"version":  version,

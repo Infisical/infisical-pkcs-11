@@ -115,6 +115,15 @@ func parseDigestInfo(data []byte) (algorithm string, digest []byte, err error) {
 	}
 }
 
+func isPSSMechanism(mech uint) bool {
+	switch mech {
+	case pkcs11.CKM_SHA256_RSA_PKCS_PSS, pkcs11.CKM_SHA384_RSA_PKCS_PSS, pkcs11.CKM_SHA512_RSA_PKCS_PSS:
+		return true
+	default:
+		return false
+	}
+}
+
 var rsaMechanisms = []uint{
 	pkcs11.CKM_RSA_PKCS,
 	pkcs11.CKM_SHA256_RSA_PKCS,
