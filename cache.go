@@ -14,44 +14,6 @@ func (e *cacheEntry[T]) isExpired() bool {
 	return time.Now().After(e.expiresAt)
 }
 
-type tokenCache struct {
-	mu    sync.RWMutex
-	ttl   time.Duration
-	entry *cacheEntry[string]
-}
-
-func newTokenCache(ttlSeconds int) *tokenCache {
-	return &tokenCache{ttl: time.Duration(ttlSeconds) * time.Second}
-}
-
-func (c *tokenCache) get() (string, bool) {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-	if c.entry == nil || c.entry.isExpired() {
-		return "", false
-	}
-	return c.entry.value, true
-}
-
-func (c *tokenCache) set(token string, ttlSeconds int) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	ttl := c.ttl
-	if ttlSeconds > 0 {
-		ttl = time.Duration(ttlSeconds) * time.Second
-	}
-	c.entry = &cacheEntry[string]{
-		value:     token,
-		expiresAt: time.Now().Add(ttl),
-	}
-}
-
-func (c *tokenCache) invalidate() {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.entry = nil
-}
-
 type signerCache struct {
 	mu    sync.RWMutex
 	ttl   time.Duration

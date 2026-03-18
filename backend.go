@@ -40,7 +40,6 @@ type InfisicalBackend struct {
 	sessions    *sessionManager
 	log         zerolog.Logger
 
-	tokenCache  *tokenCache
 	signerCache *signerCache
 	certCache   *certDataCache
 }
@@ -69,7 +68,6 @@ func (b *InfisicalBackend) Initialize() error {
 	}
 	b.client = client
 	b.sessions = newSessionManager()
-	b.tokenCache = newTokenCache(cfg.Cache.TokenTTLSeconds)
 	b.signerCache = newSignerCache(cfg.Cache.SignerTTLSeconds)
 	b.certCache = newCertDataCache(cfg.Cache.CertTTLSeconds)
 	b.initialized = true
@@ -136,39 +134,32 @@ func (b *InfisicalBackend) Finalize() error {
 }
 
 func (b *InfisicalBackend) authenticate(clientID, clientSecret string) error {
-	resp, err := b.client.Login(clientID, clientSecret)
-	if err != nil {
-		return err
-	}
-	ttl := resp.AccessTokenTTL
-	if ttl == 0 {
-		ttl = resp.ExpiresIn
-	}
-	b.tokenCache.set(resp.AccessToken, ttl)
-	return nil
+	return b.client.UniversalAuthLogin(clientID, clientSecret)
 }
 
-func (b *InfisicalBackend) refreshTokenIfNeeded() (string, error) {
-	if token, ok := b.tokenCache.get(); ok {
+func (b *InfisicalBackend) getToken() (string, error) {
+	token := b.client.GetAccessToken()
+	if token != "" {
 		return token, nil
 	}
+	// Token empty — try re-authenticating if config credentials are available.
 	if b.config.Auth.ClientID != "" && b.config.Auth.ClientSecret != "" {
 		if err := b.authenticate(b.config.Auth.ClientID, b.config.Auth.ClientSecret); err != nil {
 			return "", err
 		}
-		token, ok := b.tokenCache.get()
-		if !ok {
-			return "", fmt.Errorf("token not available after re-auth")
+		token = b.client.GetAccessToken()
+		if token != "" {
+			return token, nil
 		}
-		return token, nil
+		return "", fmt.Errorf("token not available after re-auth")
 	}
-	return "", fmt.Errorf("token expired and no credentials available for re-auth")
+	return "", fmt.Errorf("no access token and no credentials available for re-auth")
 }
 
-// withRetryOnAuth executes fn, and if it returns a 401 APIError, invalidates the token
-// cache, refreshes the token, and retries once.
+// withRetryOnAuth executes fn, and if it returns a 401 APIError, re-authenticates
+// via the SDK and retries once.
 func (b *InfisicalBackend) withRetryOnAuth(fn func(token string) error) error {
-	token, err := b.refreshTokenIfNeeded()
+	token, err := b.getToken()
 	if err != nil {
 		return err
 	}
@@ -182,14 +173,21 @@ func (b *InfisicalBackend) withRetryOnAuth(fn func(token string) error) error {
 		return err
 	}
 
-	// 401 — invalidate and retry once
-	b.log.Debug().Msg("Received 401, refreshing token and retrying")
-	b.tokenCache.invalidate()
-	token, err = b.refreshTokenIfNeeded()
-	if err != nil {
+	// 401 — re-authenticate and retry once.
+	b.log.Debug().Msg("Received 401, re-authenticating and retrying")
+
+	if b.config.Auth.ClientID != "" && b.config.Auth.ClientSecret != "" {
+		if authErr := b.authenticate(b.config.Auth.ClientID, b.config.Auth.ClientSecret); authErr != nil {
+			return authErr
+		}
+	}
+
+	newToken := b.client.GetAccessToken()
+	if newToken == "" || newToken == token {
+		// Token unchanged or empty
 		return err
 	}
-	return fn(token)
+	return fn(newToken)
 }
 
 func (b *InfisicalBackend) getSigners() ([]signerResponse, error) {
@@ -286,9 +284,9 @@ func (b *InfisicalBackend) OpenSession(slotID uint, flags uint) (pkcs11.SessionH
 	}
 	handle := b.sessions.open(slotID)
 
-	// Auto-login when config provides credentials
+	// Auto-login when config provides credentials and SDK has a valid token.
 	if b.hasConfigCredentials() {
-		if _, ok := b.tokenCache.get(); ok {
+		if b.client.GetAccessToken() != "" {
 			b.sessions.setLoggedIn(handle, true)
 		}
 	}
@@ -313,7 +311,7 @@ func (b *InfisicalBackend) Login(sh pkcs11.SessionHandle, userType uint, pin str
 	}
 
 	// If we already have a valid token (from auto-auth), just mark logged in
-	if _, ok := b.tokenCache.get(); ok && b.hasConfigCredentials() {
+	if b.client.GetAccessToken() != "" && b.hasConfigCredentials() {
 		b.sessions.setLoggedIn(sh, true)
 		b.sessions.setAllLoggedInForSlot(sess.slotID, true)
 		b.log.Debug().Uint("slot", sess.slotID).Msg("Login successful (cached token)")
@@ -357,7 +355,6 @@ func (b *InfisicalBackend) Logout(sh pkcs11.SessionHandle) error {
 		return ErrSessionHandleInvalid
 	}
 	b.sessions.setAllLoggedInForSlot(sess.slotID, false)
-	b.tokenCache.invalidate()
 	return nil
 }
 

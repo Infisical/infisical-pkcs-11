@@ -4,28 +4,6 @@ import (
 	"testing"
 )
 
-func TestTokenCache(t *testing.T) {
-	tc := newTokenCache(300)
-
-	// Empty cache
-	if _, ok := tc.get(); ok {
-		t.Error("expected empty cache")
-	}
-
-	// Set and get
-	tc.set("my-token", 300)
-	token, ok := tc.get()
-	if !ok || token != "my-token" {
-		t.Errorf("expected my-token, got %s", token)
-	}
-
-	// Invalidate
-	tc.invalidate()
-	if _, ok := tc.get(); ok {
-		t.Error("expected empty cache after invalidate")
-	}
-}
-
 func TestSignerCache(t *testing.T) {
 	sc := newSignerCache(300)
 

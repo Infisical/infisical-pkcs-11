@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
@@ -10,23 +11,14 @@ import (
 	"time"
 
 	"github.com/go-resty/resty/v2"
+	infisical "github.com/infisical/go-sdk"
 )
 
 const userAgent = "infisical-pkcs11-module"
 
 type InfisicalClient struct {
 	httpClient *resty.Client
-}
-
-type loginRequest struct {
-	ClientID     string `json:"clientId"`
-	ClientSecret string `json:"clientSecret"`
-}
-
-type loginResponse struct {
-	AccessToken    string `json:"accessToken"`
-	ExpiresIn      int    `json:"expiresIn"`
-	AccessTokenTTL int    `json:"accessTokenTTL"`
+	sdkClient  infisical.InfisicalClientInterface
 }
 
 type signerResponse struct {
@@ -68,6 +60,7 @@ func newInfisicalClient(cfg *Config) (*InfisicalClient, error) {
 		MinVersion: tls.VersionTLS12,
 	}
 
+	var caCertPEM string
 	if cfg.TLS.SkipVerify {
 		tlsCfg.InsecureSkipVerify = true
 	}
@@ -82,16 +75,25 @@ func newInfisicalClient(cfg *Config) (*InfisicalClient, error) {
 			return nil, fmt.Errorf("failed to parse CA cert from %s", cfg.TLS.CACertPath)
 		}
 		tlsCfg.RootCAs = pool
+		caCertPEM = string(caCert)
 	}
 
-	client := resty.New().
+	httpClient := resty.New().
 		SetBaseURL(cfg.ServerURL).
 		SetTLSClientConfig(tlsCfg).
 		SetTimeout(30*time.Second).
 		SetHeader("User-Agent", userAgent)
 
+	sdkClient := infisical.NewInfisicalClient(context.Background(), infisical.Config{
+		SiteUrl:          strings.TrimRight(cfg.ServerURL, "/"),
+		CaCertificate:    caCertPEM,
+		AutoTokenRefresh: true,
+		UserAgent:        userAgent,
+	})
+
 	return &InfisicalClient{
-		httpClient: client,
+		httpClient: httpClient,
+		sdkClient:  sdkClient,
 	}, nil
 }
 
@@ -108,26 +110,16 @@ func parseErrorResponse(resp *resty.Response) string {
 	return fmt.Sprintf("HTTP %d", resp.StatusCode())
 }
 
-func (c *InfisicalClient) Login(clientID, clientSecret string) (*loginResponse, error) {
-	const operation = "login"
-
-	var result loginResponse
-	resp, err := c.httpClient.R().
-		SetBody(loginRequest{
-			ClientID:     clientID,
-			ClientSecret: clientSecret,
-		}).
-		SetResult(&result).
-		Post("/api/v1/auth/universal-auth/login")
-
+func (c *InfisicalClient) UniversalAuthLogin(clientID, clientSecret string) error {
+	_, err := c.sdkClient.Auth().UniversalAuthLogin(clientID, clientSecret)
 	if err != nil {
-		return nil, &RequestError{Operation: operation, Err: err}
+		return &RequestError{Operation: "login", Err: err}
 	}
-	if resp.IsError() {
-		return nil, NewAPIError(operation, resp.StatusCode(), parseErrorResponse(resp))
-	}
+	return nil
+}
 
-	return &result, nil
+func (c *InfisicalClient) GetAccessToken() string {
+	return c.sdkClient.Auth().GetAccessToken()
 }
 
 func (c *InfisicalClient) ListSigners(token, projectID string) ([]signerResponse, error) {
