@@ -130,6 +130,8 @@ The module reads a JSON config file and environment variables. Environment varia
 | `cache.token_ttl_seconds` | No | `300` | Auth token cache duration |
 | `cache.cert_ttl_seconds` | No | `3600` | Certificate data cache duration |
 | `cache.signer_ttl_seconds` | No | `300` | Signer list cache duration |
+| `approval.signing_duration` | No | — | Auto-request approval with this time window (e.g. `"8h"`, `"30m"`, `"2d"`). Range: 1m–30d |
+| `approval.signing_count` | No | — | Auto-request approval for this many signings |
 | `log_level` | No | `info` | Log verbosity: `trace`, `debug`, `info`, `warn`, `error` |
 | `log_file` | No | stderr | Path to log file |
 
@@ -152,6 +154,10 @@ The module reads a JSON config file and environment variables. Environment varia
     "token_ttl_seconds": 300,
     "cert_ttl_seconds": 3600,
     "signer_ttl_seconds": 300
+  },
+  "approval": {
+    "signing_duration": "8h",
+    "signing_count": 10
   },
   "log_level": "info",
   "log_file": "/var/log/infisical-pkcs11.log"
@@ -352,6 +358,21 @@ gpg --card-status
 ## Approval Workflow
 
 If a signer has an approval policy, you need an approved grant before signing. Without it, sign requests will return `CKR_GENERAL_ERROR` (HTTP 403).
+
+### Automatic Approval Requests
+
+When `approval.signing_duration` and/or `approval.signing_count` are configured, the module **automatically creates an approval request** when signing is denied due to a missing grant. The sign operation still fails (an approver must approve the request first), but the request is created for you — no manual API call needed.
+
+```json
+{
+  "approval": {
+    "signing_duration": "8h",
+    "signing_count": 10
+  }
+}
+```
+
+Once an approver approves the request (via the Infisical UI at Cert Manager > Approvals), retrying the sign operation will succeed.
 
 <details>
 <summary>Requesting approval via API</summary>

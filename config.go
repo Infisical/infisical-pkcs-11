@@ -5,6 +5,9 @@ import (
 	"fmt"
 	"os"
 	"runtime"
+	"strconv"
+	"strings"
+	"time"
 )
 
 const (
@@ -33,14 +36,20 @@ type AuthConfig struct {
 	ClientSecret string `json:"client_secret"`
 }
 
+type ApprovalConfig struct {
+	SigningCount    int    `json:"signing_count"`
+	SigningDuration string `json:"signing_duration"`
+}
+
 type Config struct {
-	ServerURL string      `json:"server_url"`
-	Auth      AuthConfig  `json:"auth"`
-	ProjectID string      `json:"project_id"`
-	TLS       TLSConfig   `json:"tls"`
-	Cache     CacheConfig `json:"cache"`
-	LogLevel  string      `json:"log_level"`
-	LogFile   string      `json:"log_file"`
+	ServerURL string         `json:"server_url"`
+	Auth      AuthConfig     `json:"auth"`
+	ProjectID string         `json:"project_id"`
+	TLS       TLSConfig      `json:"tls"`
+	Cache     CacheConfig    `json:"cache"`
+	Approval  ApprovalConfig `json:"approval"`
+	LogLevel  string         `json:"log_level"`
+	LogFile   string         `json:"log_file"`
 }
 
 func (c *Config) setDefaults() {
@@ -71,6 +80,17 @@ func (c *Config) applyEnvOverrides() {
 	}
 }
 
+func parseDuration(s string) (time.Duration, error) {
+	if strings.HasSuffix(s, "d") {
+		days, err := strconv.Atoi(strings.TrimSuffix(s, "d"))
+		if err != nil {
+			return 0, fmt.Errorf("invalid duration: %s", s)
+		}
+		return time.Duration(days) * 24 * time.Hour, nil
+	}
+	return time.ParseDuration(s)
+}
+
 func (c *Config) validate() error {
 	if c.ServerURL == "" {
 		return fmt.Errorf("server_url is required")
@@ -83,6 +103,18 @@ func (c *Config) validate() error {
 	}
 	if c.Auth.Method != "universal-auth" {
 		return fmt.Errorf("unsupported auth method: %s (must be 'universal-auth')", c.Auth.Method)
+	}
+	if c.Approval.SigningDuration != "" {
+		d, err := parseDuration(c.Approval.SigningDuration)
+		if err != nil {
+			return fmt.Errorf("invalid approval.signing_duration: %w", err)
+		}
+		if d < time.Minute || d > 30*24*time.Hour {
+			return fmt.Errorf("approval.signing_duration must be between 1m and 30d")
+		}
+	}
+	if c.Approval.SigningCount < 0 {
+		return fmt.Errorf("approval.signing_count must be a positive integer")
 	}
 	return nil
 }

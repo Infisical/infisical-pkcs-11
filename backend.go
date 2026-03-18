@@ -1025,6 +1025,10 @@ func (b *InfisicalBackend) signInternal(sess *session, data []byte) ([]byte, err
 		return callErr
 	})
 	if err != nil {
+		var apiErr *APIError
+		if errors.As(err, &apiErr) && apiErr.StatusCode == 403 {
+			b.requestApprovalIfConfigured(signer)
+		}
 		b.log.Error().Err(err).Str("signer", signer.Name).Str("algorithm", algorithm).Msg("Sign failed")
 		return nil, err
 	}
@@ -1036,6 +1040,59 @@ func (b *InfisicalBackend) signInternal(sess *session, data []byte) ([]byte, err
 
 	b.log.Info().Str("signer", signer.Name).Str("algorithm", algorithm).Int("sig_bytes", len(sig)).Msg("Sign successful")
 	return sig, nil
+}
+
+func (b *InfisicalBackend) requestApprovalIfConfigured(signer *signerResponse) {
+	cfg := b.config.Approval
+	if cfg.SigningCount == 0 && cfg.SigningDuration == "" {
+		return
+	}
+	if signer.ApprovalPolicyID == nil || *signer.ApprovalPolicyID == "" {
+		b.log.Warn().Str("signer", signer.Name).Msg("Signing requires approval but signer has no approval policy ID; cannot auto-request")
+		return
+	}
+
+	reqData := approvalRequestData{
+		SignerID:         signer.ID,
+		ApprovalPolicyID: *signer.ApprovalPolicyID,
+		SignerName:       signer.Name,
+		Justification:    "Auto-requested by PKCS#11 module",
+	}
+
+	if cfg.SigningDuration != "" {
+		d, err := parseDuration(cfg.SigningDuration)
+		if err == nil {
+			now := time.Now().UTC()
+			reqData.RequestedWindowStart = now.Format(time.RFC3339)
+			reqData.RequestedWindowEnd = now.Add(d).Format(time.RFC3339)
+		}
+	}
+	if cfg.SigningCount > 0 {
+		reqData.RequestedSignings = cfg.SigningCount
+	}
+
+	req := approvalRequest{
+		ProjectID:   b.config.ProjectID,
+		RequestData: reqData,
+	}
+
+	token, err := b.getToken()
+	if err != nil {
+		b.log.Warn().Msg("Cannot auto-request approval: no access token")
+		return
+	}
+
+	result, err := b.client.RequestApproval(token, req)
+	if err != nil {
+		b.log.Warn().Err(err).Str("signer", signer.Name).Msg("Failed to auto-request signing approval")
+		return
+	}
+
+	b.log.Info().
+		Str("signer", signer.Name).
+		Str("request_id", result.Request.ID).
+		Str("status", result.Request.Status).
+		Msg("Auto-requested signing approval (requires approver action)")
 }
 
 func (b *InfisicalBackend) EstimateSignatureSize(sh pkcs11.SessionHandle) int {

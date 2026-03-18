@@ -19,6 +19,7 @@ const userAgent = "infisical-pkcs11-module"
 type InfisicalClient struct {
 	httpClient *resty.Client
 	sdkClient  infisical.InfisicalClientInterface
+	sdkConfig  infisical.Config
 }
 
 type signerResponse struct {
@@ -26,6 +27,7 @@ type signerResponse struct {
 	Name                    string  `json:"name"`
 	CertificateID           string  `json:"certificateId"`
 	CertificateKeyAlgorithm *string `json:"certificateKeyAlgorithm"`
+	ApprovalPolicyID        *string `json:"approvalPolicyId"`
 }
 
 func (s *signerResponse) keyAlgorithm() string {
@@ -60,11 +62,11 @@ func newInfisicalClient(cfg *Config) (*InfisicalClient, error) {
 		MinVersion: tls.VersionTLS12,
 	}
 
-	var caCertPEM string
 	if cfg.TLS.SkipVerify {
 		tlsCfg.InsecureSkipVerify = true
 	}
 
+	var caCertPEM string
 	if cfg.TLS.CACertPath != "" {
 		caCert, err := os.ReadFile(cfg.TLS.CACertPath)
 		if err != nil {
@@ -84,16 +86,16 @@ func newInfisicalClient(cfg *Config) (*InfisicalClient, error) {
 		SetTimeout(30*time.Second).
 		SetHeader("User-Agent", userAgent)
 
-	sdkClient := infisical.NewInfisicalClient(context.Background(), infisical.Config{
-		SiteUrl:          strings.TrimRight(cfg.ServerURL, "/"),
-		CaCertificate:    caCertPEM,
-		AutoTokenRefresh: true,
-		UserAgent:        userAgent,
-	})
+	sdkCfg := infisical.Config{
+		SiteUrl:       strings.TrimRight(cfg.ServerURL, "/"),
+		CaCertificate: caCertPEM,
+		UserAgent:     userAgent,
+		SilentMode:    true,
+	}
 
 	return &InfisicalClient{
 		httpClient: httpClient,
-		sdkClient:  sdkClient,
+		sdkConfig:  sdkCfg,
 	}, nil
 }
 
@@ -110,7 +112,14 @@ func parseErrorResponse(resp *resty.Response) string {
 	return fmt.Sprintf("HTTP %d", resp.StatusCode())
 }
 
+func (c *InfisicalClient) ensureSDKClient() {
+	if c.sdkClient == nil {
+		c.sdkClient = infisical.NewInfisicalClient(context.Background(), c.sdkConfig)
+	}
+}
+
 func (c *InfisicalClient) UniversalAuthLogin(clientID, clientSecret string) error {
+	c.ensureSDKClient()
 	_, err := c.sdkClient.Auth().UniversalAuthLogin(clientID, clientSecret)
 	if err != nil {
 		return &RequestError{Operation: "login", Err: err}
@@ -119,6 +128,9 @@ func (c *InfisicalClient) UniversalAuthLogin(clientID, clientSecret string) erro
 }
 
 func (c *InfisicalClient) GetAccessToken() string {
+	if c.sdkClient == nil {
+		return ""
+	}
 	return c.sdkClient.Auth().GetAccessToken()
 }
 
@@ -177,6 +189,50 @@ func (c *InfisicalClient) Sign(token, signerID string, req signRequest) (*signRe
 		SetBody(req).
 		SetResult(&result).
 		Post(fmt.Sprintf("/api/v1/cert-manager/signers/%s/sign", signerID))
+
+	if err != nil {
+		return nil, &RequestError{Operation: operation, Err: err}
+	}
+	if resp.IsError() {
+		return nil, NewAPIError(operation, resp.StatusCode(), parseErrorResponse(resp))
+	}
+
+	return &result, nil
+}
+
+type approvalRequestData struct {
+	SignerID             string `json:"signerId"`
+	ApprovalPolicyID     string `json:"approvalPolicyId"`
+	SignerName           string `json:"signerName"`
+	Justification        string `json:"justification,omitempty"`
+	RequestedWindowStart string `json:"requestedWindowStart,omitempty"`
+	RequestedWindowEnd   string `json:"requestedWindowEnd,omitempty"`
+	RequestedSignings    int    `json:"requestedSignings,omitempty"`
+}
+
+type approvalRequest struct {
+	ProjectID   string              `json:"projectId"`
+	RequestData approvalRequestData `json:"requestData"`
+}
+
+type approvalRequestResponseInner struct {
+	ID     string `json:"id"`
+	Status string `json:"status"`
+}
+
+type approvalRequestResponse struct {
+	Request approvalRequestResponseInner `json:"request"`
+}
+
+func (c *InfisicalClient) RequestApproval(token string, req approvalRequest) (*approvalRequestResponse, error) {
+	const operation = "request-approval"
+
+	var result approvalRequestResponse
+	resp, err := c.httpClient.R().
+		SetAuthToken(token).
+		SetBody(req).
+		SetResult(&result).
+		Post("/api/v1/approval-policies/cert-code-signing/requests")
 
 	if err != nil {
 		return nil, &RequestError{Operation: operation, Err: err}
