@@ -17,7 +17,6 @@ func TestLoadConfig(t *testing.T) {
 			"client_id": "test-id",
 			"client_secret": "test-secret"
 		},
-		"project_id": "proj-123",
 		"tls": {
 			"skip_verify": false
 		},
@@ -42,9 +41,6 @@ func TestLoadConfig(t *testing.T) {
 	if cfg.ServerURL != "https://app.infisical.com" {
 		t.Errorf("expected server_url https://app.infisical.com, got %s", cfg.ServerURL)
 	}
-	if cfg.ProjectID != "proj-123" {
-		t.Errorf("expected project_id proj-123, got %s", cfg.ProjectID)
-	}
 	if cfg.Auth.ClientID != "test-id" {
 		t.Errorf("expected client_id test-id, got %s", cfg.Auth.ClientID)
 	}
@@ -64,8 +60,7 @@ func TestLoadConfigDefaults(t *testing.T) {
 	configPath := filepath.Join(dir, "pkcs11.conf")
 
 	configJSON := `{
-		"server_url": "https://app.infisical.com",
-		"project_id": "proj-123"
+		"server_url": "https://app.infisical.com"
 	}`
 
 	if err := os.WriteFile(configPath, []byte(configJSON), 0600); err != nil {
@@ -99,7 +94,6 @@ func TestLoadConfigEnvOverrides(t *testing.T) {
 
 	configJSON := `{
 		"server_url": "https://app.infisical.com",
-		"project_id": "proj-123",
 		"auth": {
 			"client_id": "config-id",
 			"client_secret": "config-secret"
@@ -137,19 +131,14 @@ func TestLoadConfigValidation(t *testing.T) {
 		wantErr bool
 	}{
 		{
-			"missing server_url",
-			`{"project_id": "proj-123"}`,
-			true,
+			name:    "missing server_url",
+			config:  `{}`,
+			wantErr: true,
 		},
 		{
-			"missing project_id",
-			`{"server_url": "https://app.infisical.com"}`,
-			true,
-		},
-		{
-			"unsupported auth method",
-			`{"server_url": "https://app.infisical.com", "project_id": "proj-123", "auth": {"method": "oauth"}}`,
-			true,
+			name:    "unsupported auth method",
+			config:  `{"server_url": "https://app.infisical.com", "auth": {"method": "oauth"}}`,
+			wantErr: true,
 		},
 	}
 

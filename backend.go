@@ -198,7 +198,7 @@ func (b *InfisicalBackend) getSigners() ([]signerResponse, error) {
 	var signers []signerResponse
 	err := b.withRetryOnAuth(func(token string) error {
 		var callErr error
-		signers, callErr = b.client.ListSigners(token, b.config.ProjectID)
+		signers, callErr = b.client.ListSigners(token)
 		return callErr
 	})
 	if err != nil {
@@ -766,7 +766,7 @@ func (b *InfisicalBackend) getCertificateData(signerID string) ([]byte, error) {
 	var certResp *certBodyResponse
 	err = b.withRetryOnAuth(func(token string) error {
 		var callErr error
-		certResp, callErr = b.client.GetCertificate(token, signer.CertificateID)
+		certResp, callErr = b.client.GetCertificate(token, signer.ID)
 		return callErr
 	})
 	if err != nil {
@@ -1052,28 +1052,20 @@ func (b *InfisicalBackend) requestApprovalIfConfigured(signer *signerResponse) {
 		return
 	}
 
-	reqData := approvalRequestData{
-		SignerID:         signer.ID,
-		ApprovalPolicyID: *signer.ApprovalPolicyID,
-		SignerName:       signer.Name,
-		Justification:    "Auto-requested by PKCS#11 module",
+	req := approvalRequest{
+		Justification: "Auto-requested by PKCS#11 module",
 	}
 
 	if cfg.SigningDuration != "" {
 		d, err := parseDuration(cfg.SigningDuration)
 		if err == nil {
 			now := time.Now().UTC()
-			reqData.RequestedWindowStart = now.Format(time.RFC3339)
-			reqData.RequestedWindowEnd = now.Add(d).Format(time.RFC3339)
+			req.RequestedWindowStart = now.Format(time.RFC3339)
+			req.RequestedWindowEnd = now.Add(d).Format(time.RFC3339)
 		}
 	}
 	if cfg.SigningCount > 0 {
-		reqData.RequestedSignings = cfg.SigningCount
-	}
-
-	req := approvalRequest{
-		ProjectID:   b.config.ProjectID,
-		RequestData: reqData,
+		req.RequestedSignings = cfg.SigningCount
 	}
 
 	token, err := b.getToken()
@@ -1082,7 +1074,7 @@ func (b *InfisicalBackend) requestApprovalIfConfigured(signer *signerResponse) {
 		return
 	}
 
-	result, err := b.client.RequestApproval(token, req)
+	result, err := b.client.RequestApproval(token, signer.ID, req)
 	if err != nil {
 		b.log.Warn().Err(err).Str("signer", signer.Name).Msg("Failed to auto-request signing approval")
 		return
@@ -1090,8 +1082,8 @@ func (b *InfisicalBackend) requestApprovalIfConfigured(signer *signerResponse) {
 
 	b.log.Info().
 		Str("signer", signer.Name).
-		Str("request_id", result.Request.ID).
-		Str("status", result.Request.Status).
+		Str("request_id", result.ID).
+		Str("status", result.Status).
 		Msg("Auto-requested signing approval (requires approver action)")
 }
 

@@ -44,7 +44,6 @@ type ApprovalConfig struct {
 type Config struct {
 	ServerURL string         `json:"server_url"`
 	Auth      AuthConfig     `json:"auth"`
-	ProjectID string         `json:"project_id"`
 	TLS       TLSConfig      `json:"tls"`
 	Cache     CacheConfig    `json:"cache"`
 	Approval  ApprovalConfig `json:"approval"`
@@ -94,9 +93,6 @@ func parseDuration(s string) (time.Duration, error) {
 func (c *Config) validate() error {
 	if c.ServerURL == "" {
 		return fmt.Errorf("server_url is required")
-	}
-	if c.ProjectID == "" {
-		return fmt.Errorf("project_id is required")
 	}
 	if c.Auth.Method == "" {
 		c.Auth.Method = "universal-auth"

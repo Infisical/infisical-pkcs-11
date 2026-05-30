@@ -74,8 +74,7 @@ Create `/etc/infisical/pkcs11.conf` (or set `INFISICAL_PKCS11_CONFIG` to a custo
 
 ```json
 {
-  "server_url": "https://app.infisical.com",
-  "project_id": "your-project-id"
+  "server_url": "https://app.infisical.com"
 }
 ```
 
@@ -122,7 +121,6 @@ The module reads a JSON config file and environment variables. Environment varia
 | Field | Required | Default | Description |
 |-------|----------|---------|-------------|
 | `server_url` | Yes | — | Infisical server URL |
-| `project_id` | Yes | — | Project ID containing your signers |
 | `auth.client_id` | No | — | Machine Identity client ID (prefer env var) |
 | `auth.client_secret` | No | — | Machine Identity client secret (prefer env var) |
 | `tls.ca_cert_path` | No | — | Custom CA certificate for self-hosted instances |
@@ -141,7 +139,6 @@ The module reads a JSON config file and environment variables. Environment varia
 ```json
 {
   "server_url": "https://app.infisical.com",
-  "project_id": "your-project-id",
   "auth": {
     "client_id": "your-client-id",
     "client_secret": "your-client-secret"
@@ -387,21 +384,13 @@ TOKEN=$(curl -s https://app.infisical.com/api/v1/auth/universal-auth/login \
 START=$(date -u -v+1M +"%Y-%m-%dT%H:%M:%SZ")  # 1 minute from now
 END=$(date -u -v+8H +"%Y-%m-%dT%H:%M:%SZ")     # 8 hours from now
 
-curl -s https://app.infisical.com/api/v1/approval-policies/cert-manager-code-signing/requests \
+curl -s https://app.infisical.com/api/v1/cert-manager/signers/your-signer-id/requests \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer $TOKEN" \
   -d "{
-    \"projectId\": \"your-project-id\",
-    \"inputs\": { \"approvalPolicyId\": \"your-policy-id\" },
-    \"requestData\": {
-      \"signerId\": \"your-signer-id\",
-      \"signerName\": \"your-signer-name\",
-      \"approvalPolicyId\": \"your-policy-id\",
-      \"approvalMode\": \"time-window\",
-      \"requestedWindowStart\": \"$START\",
-      \"requestedWindowEnd\": \"$END\"
-    },
-    \"justification\": \"CI/CD release build\"
+    \"justification\": \"CI/CD release build\",
+    \"requestedWindowStart\": \"$START\",
+    \"requestedWindowEnd\": \"$END\"
   }"
 ```
 
