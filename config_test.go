@@ -140,6 +140,26 @@ func TestLoadConfigValidation(t *testing.T) {
 			config:  `{"server_url": "https://app.infisical.com", "auth": {"method": "oauth"}}`,
 			wantErr: true,
 		},
+		{
+			name:    "rejects non-http(s) scheme",
+			config:  `{"server_url": "file:///etc/passwd"}`,
+			wantErr: true,
+		},
+		{
+			name:    "rejects bare path without scheme",
+			config:  `{"server_url": "app.infisical.com"}`,
+			wantErr: true,
+		},
+		{
+			name:    "accepts http for local dev",
+			config:  `{"server_url": "http://localhost:8080"}`,
+			wantErr: false,
+		},
+		{
+			name:    "accepts https",
+			config:  `{"server_url": "https://app.infisical.com"}`,
+			wantErr: false,
+		},
 	}
 
 	for _, tt := range tests {
