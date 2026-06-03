@@ -23,18 +23,16 @@ type InfisicalClient struct {
 }
 
 type signerResponse struct {
-	ID                      string  `json:"id"`
-	Name                    string  `json:"name"`
-	CertificateID           string  `json:"certificateId"`
-	CertificateKeyAlgorithm *string `json:"certificateKeyAlgorithm"`
-	ApprovalPolicyID        *string `json:"approvalPolicyId"`
+	ID               string  `json:"id"`
+	Name             string  `json:"name"`
+	Status           string  `json:"status"`
+	CertificateID    string  `json:"certificateId"`
+	KeyAlgorithm     string  `json:"keyAlgorithm"`
+	ApprovalPolicyID *string `json:"approvalPolicyId"`
 }
 
 func (s *signerResponse) keyAlgorithm() string {
-	if s.CertificateKeyAlgorithm != nil {
-		return strings.ToLower(*s.CertificateKeyAlgorithm)
-	}
-	return ""
+	return strings.ToLower(s.KeyAlgorithm)
 }
 
 type listSignersResponse struct {
@@ -134,13 +132,12 @@ func (c *InfisicalClient) GetAccessToken() string {
 	return c.sdkClient.Auth().GetAccessToken()
 }
 
-func (c *InfisicalClient) ListSigners(token, projectID string) ([]signerResponse, error) {
+func (c *InfisicalClient) ListSigners(token string) ([]signerResponse, error) {
 	const operation = "list-signers"
 
 	var result listSignersResponse
 	resp, err := c.httpClient.R().
 		SetAuthToken(token).
-		SetQueryParam("projectId", projectID).
 		SetQueryParam("limit", "100").
 		SetResult(&result).
 		Get("/api/v1/cert-manager/signers")
@@ -159,16 +156,19 @@ type certBodyResponse struct {
 	Certificate string `json:"certificate"`
 }
 
-// GetCertificate fetches the PEM certificate body using the certificate ID
-// (from the signer's certificateId field, not the signer ID).
-func (c *InfisicalClient) GetCertificate(token, certificateID string) (*certBodyResponse, error) {
+type signerCertResponse struct {
+	CertificatePem string `json:"certificatePem"`
+	SignerName     string `json:"signerName"`
+}
+
+func (c *InfisicalClient) GetCertificate(token, signerID string) (*certBodyResponse, error) {
 	const operation = "get-certificate"
 
-	var result certBodyResponse
+	var raw signerCertResponse
 	resp, err := c.httpClient.R().
 		SetAuthToken(token).
-		SetResult(&result).
-		Get(fmt.Sprintf("/api/v1/cert-manager/certificates/%s/certificate", certificateID))
+		SetResult(&raw).
+		Get(fmt.Sprintf("/api/v1/cert-manager/signers/%s/certificate", signerID))
 
 	if err != nil {
 		return nil, &RequestError{Operation: operation, Err: err}
@@ -177,7 +177,7 @@ func (c *InfisicalClient) GetCertificate(token, certificateID string) (*certBody
 		return nil, NewAPIError(operation, resp.StatusCode(), parseErrorResponse(resp))
 	}
 
-	return &result, nil
+	return &certBodyResponse{Certificate: raw.CertificatePem}, nil
 }
 
 func (c *InfisicalClient) Sign(token, signerID string, req signRequest) (*signResponse, error) {
@@ -200,31 +200,19 @@ func (c *InfisicalClient) Sign(token, signerID string, req signRequest) (*signRe
 	return &result, nil
 }
 
-type approvalRequestData struct {
-	SignerID             string `json:"signerId"`
-	ApprovalPolicyID     string `json:"approvalPolicyId"`
-	SignerName           string `json:"signerName"`
-	Justification        string `json:"justification,omitempty"`
+type approvalRequest struct {
+	Justification        string `json:"justification"`
+	RequestedSignings    int    `json:"requestedSignings,omitempty"`
 	RequestedWindowStart string `json:"requestedWindowStart,omitempty"`
 	RequestedWindowEnd   string `json:"requestedWindowEnd,omitempty"`
-	RequestedSignings    int    `json:"requestedSignings,omitempty"`
 }
 
-type approvalRequest struct {
-	ProjectID   string              `json:"projectId"`
-	RequestData approvalRequestData `json:"requestData"`
-}
-
-type approvalRequestResponseInner struct {
+type approvalRequestResponse struct {
 	ID     string `json:"id"`
 	Status string `json:"status"`
 }
 
-type approvalRequestResponse struct {
-	Request approvalRequestResponseInner `json:"request"`
-}
-
-func (c *InfisicalClient) RequestApproval(token string, req approvalRequest) (*approvalRequestResponse, error) {
+func (c *InfisicalClient) RequestApproval(token, signerID string, req approvalRequest) (*approvalRequestResponse, error) {
 	const operation = "request-approval"
 
 	var result approvalRequestResponse
@@ -232,7 +220,7 @@ func (c *InfisicalClient) RequestApproval(token string, req approvalRequest) (*a
 		SetAuthToken(token).
 		SetBody(req).
 		SetResult(&result).
-		Post("/api/v1/approval-policies/cert-code-signing/requests")
+		Post(fmt.Sprintf("/api/v1/cert-manager/signers/%s/requests", signerID))
 
 	if err != nil {
 		return nil, &RequestError{Operation: operation, Err: err}

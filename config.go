@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"os"
 	"runtime"
 	"strconv"
@@ -44,7 +45,6 @@ type ApprovalConfig struct {
 type Config struct {
 	ServerURL string         `json:"server_url"`
 	Auth      AuthConfig     `json:"auth"`
-	ProjectID string         `json:"project_id"`
 	TLS       TLSConfig      `json:"tls"`
 	Cache     CacheConfig    `json:"cache"`
 	Approval  ApprovalConfig `json:"approval"`
@@ -95,8 +95,16 @@ func (c *Config) validate() error {
 	if c.ServerURL == "" {
 		return fmt.Errorf("server_url is required")
 	}
-	if c.ProjectID == "" {
-		return fmt.Errorf("project_id is required")
+	parsedURL, err := url.Parse(c.ServerURL)
+	if err != nil {
+		return fmt.Errorf("server_url is not a valid URL: %w", err)
+	}
+	scheme := strings.ToLower(parsedURL.Scheme)
+	if scheme != "http" && scheme != "https" {
+		return fmt.Errorf("server_url scheme must be http or https, got %q", parsedURL.Scheme)
+	}
+	if parsedURL.Host == "" {
+		return fmt.Errorf("server_url must include a host")
 	}
 	if c.Auth.Method == "" {
 		c.Auth.Method = "universal-auth"

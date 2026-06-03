@@ -4,11 +4,11 @@
 </h1>
 
 <p align="center">
-  <p align="center"><b>Infisical PKCS#11 Module</b>: Sign code and artifacts using keys managed in Infisical — private keys never leave the server.</p>
+  <p align="center"><b>Infisical PKCS#11 Module</b>: Sign code and artifacts using keys managed in Infisical — private keys never leave Infisical.</p>
 </p>
 
 <h4 align="center">
-  <a href="https://infisical.com/docs/documentation/platform/pki/code-signing">Docs</a> |
+  <a href="https://infisical.com/docs/documentation/platform/pki/code-signing/overview">Docs</a> |
   <a href="https://infisical.com/slack">Slack</a> |
   <a href="https://infisical.com/">Infisical Cloud</a> |
   <a href="https://www.infisical.com">Website</a>
@@ -28,16 +28,16 @@
 
 ## Introduction
 
-The **Infisical PKCS#11 Module** is a shared library (`.so`, `.dylib`, `.dll`) that implements [PKCS#11 v2.40](http://docs.oasis-open.org/pkcs11/pkcs11-base/v2.40/pkcs11-base-v2.40.html). It acts as a bridge between standard signing tools and the Infisical API — your tool loads the library, and all cryptographic operations happen server-side.
+The **Infisical PKCS#11 Module** is a shared library (`.so`, `.dylib`, `.dll`) that implements [PKCS#11 v2.40](http://docs.oasis-open.org/pkcs11/pkcs11-base/v2.40/pkcs11-base-v2.40.html). It acts as a bridge between standard signing tools and the Infisical API — your tool loads the library, and all cryptographic operations are performed by Infisical.
 
 Each **Signer** in your Infisical project appears as a PKCS#11 **slot**, exposing a private key object (for signing) and a certificate object (for verification and chain building).
 
 ## Features
 
-- **[Remote Signing](https://infisical.com/docs/documentation/platform/pki/code-signing)**: Private keys never leave Infisical. All signing operations are performed server-side.
+- **[Remote Signing](https://infisical.com/docs/documentation/platform/pki/code-signing/overview)**: Private keys never leave Infisical. All signing operations are performed by Infisical.
 - **[Universal Tool Compatibility](#tool-integration-guides)**: Works with jarsigner, osslsigncode, signtool, pkcs11-tool, GnuTLS, OpenSSL, and any PKCS#11 consumer.
 - **[RSA and ECDSA Support](#supported-mechanisms)**: SHA-256/384/512 with PKCS#1 v1.5, PSS, and ECDSA. Supports P-256, P-384, and P-521 curves.
-- **[Approval Workflows](#approval-workflow)**: Require human review before signing via time-window, n-signings, or manual approval modes.
+- **[Approval Workflows](#approval-workflow)**: Require human review before signing, bounded by a signature count and/or a time window per approval.
 - **[Audit Logging](https://infisical.com/docs/documentation/platform/audit-logs)**: Every signing operation is recorded with actor, timestamp, and client metadata.
 - **[Cross-Platform](#install)**: Pre-built binaries for Linux (x86_64, ARM64), macOS (x86_64, ARM64), and Windows (x86_64).
 
@@ -45,8 +45,9 @@ Each **Signer** in your Infisical project appears as a PKCS#11 **slot**, exposin
 
 - An Infisical instance with the **Cert Manager** product enabled
 - At least one **Signer** created (Cert Manager > Code Signing > Signers)
-- A **Machine Identity** with Universal Auth configured and granted the `code-signers` permission (Read + Sign)
-- If using approval policies: an approved grant for the signer before signing
+- The Signer must be backed by an Internal CA, AWS Private CA, or Azure AD CS
+- A **Machine Identity** configured for Universal Auth, added as a member of the Signer with the Administrator or Operator role. Membership is configured on the signer's Members tab.
+- If using approval policies: an approved sign request for the signer before signing
 
 ## Quick Start
 
@@ -74,8 +75,7 @@ Create `/etc/infisical/pkcs11.conf` (or set `INFISICAL_PKCS11_CONFIG` to a custo
 
 ```json
 {
-  "server_url": "https://app.infisical.com",
-  "project_id": "your-project-id"
+  "server_url": "https://app.infisical.com"
 }
 ```
 
@@ -122,7 +122,6 @@ The module reads a JSON config file and environment variables. Environment varia
 | Field | Required | Default | Description |
 |-------|----------|---------|-------------|
 | `server_url` | Yes | — | Infisical server URL |
-| `project_id` | Yes | — | Project ID containing your signers |
 | `auth.client_id` | No | — | Machine Identity client ID (prefer env var) |
 | `auth.client_secret` | No | — | Machine Identity client secret (prefer env var) |
 | `tls.ca_cert_path` | No | — | Custom CA certificate for self-hosted instances |
@@ -141,7 +140,6 @@ The module reads a JSON config file and environment variables. Environment varia
 ```json
 {
   "server_url": "https://app.infisical.com",
-  "project_id": "your-project-id",
   "auth": {
     "client_id": "your-client-id",
     "client_secret": "your-client-secret"
@@ -357,11 +355,11 @@ gpg --card-status
 
 ## Approval Workflow
 
-If a signer has an approval policy, you need an approved grant before signing. Without it, sign requests will return `CKR_GENERAL_ERROR` (HTTP 403).
+If a signer has an approval policy, you need an approved sign request before signing. Without it, sign requests will return `CKR_GENERAL_ERROR` (HTTP 403).
 
 ### Automatic Approval Requests
 
-When `approval.signing_duration` and/or `approval.signing_count` are configured, the module **automatically creates an approval request** when signing is denied due to a missing grant. The sign operation still fails (an approver must approve the request first), but the request is created for you — no manual API call needed.
+When `approval.signing_duration` and/or `approval.signing_count` are configured, the module **automatically creates an approval request** when signing is denied because no approved sign request exists. The sign operation still fails (an approver must approve the request first), but the request is created for you — no manual API call needed.
 
 ```json
 {
@@ -372,7 +370,7 @@ When `approval.signing_duration` and/or `approval.signing_count` are configured,
 }
 ```
 
-Once an approver approves the request (via the Infisical UI at Cert Manager > Approvals), retrying the sign operation will succeed.
+Once an approver approves the request (via the Infisical UI at Cert Manager > Code Signing > Signers > `<signer>` > Approvals tab), retrying the sign operation will succeed.
 
 <details>
 <summary>Requesting approval via API</summary>
@@ -383,39 +381,46 @@ TOKEN=$(curl -s https://app.infisical.com/api/v1/auth/universal-auth/login \
   -H "Content-Type: application/json" \
   -d '{"clientId":"...","clientSecret":"..."}' | jq -r '.accessToken')
 
-# Request a time-window grant (e.g., 8 hours)
-START=$(date -u -v+1M +"%Y-%m-%dT%H:%M:%SZ")  # 1 minute from now
-END=$(date -u -v+8H +"%Y-%m-%dT%H:%M:%SZ")     # 8 hours from now
+# Request access for an 8-hour window, capped at 10 signatures
+# macOS / BSD:
+START=$(date -u -v+1M +"%Y-%m-%dT%H:%M:%SZ")
+END=$(date -u -v+8H +"%Y-%m-%dT%H:%M:%SZ")
+# Linux / GNU coreutils (uncomment if your `date` is GNU):
+# START=$(date -u -d '+1 minute' +"%Y-%m-%dT%H:%M:%SZ")
+# END=$(date -u -d '+8 hours' +"%Y-%m-%dT%H:%M:%SZ")
 
-curl -s https://app.infisical.com/api/v1/approval-policies/cert-manager-code-signing/requests \
+curl -s https://app.infisical.com/api/v1/cert-manager/signers/your-signer-id/requests \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer $TOKEN" \
   -d "{
-    \"projectId\": \"your-project-id\",
-    \"inputs\": { \"approvalPolicyId\": \"your-policy-id\" },
-    \"requestData\": {
-      \"signerId\": \"your-signer-id\",
-      \"signerName\": \"your-signer-name\",
-      \"approvalPolicyId\": \"your-policy-id\",
-      \"approvalMode\": \"time-window\",
-      \"requestedWindowStart\": \"$START\",
-      \"requestedWindowEnd\": \"$END\"
-    },
-    \"justification\": \"CI/CD release build\"
+    \"justification\": \"CI/CD release build\",
+    \"requestedSignings\": 10,
+    \"requestedWindowStart\": \"$START\",
+    \"requestedWindowEnd\": \"$END\"
   }"
 ```
 
-An approver must approve the request via the Infisical UI (Cert Manager > Approvals). Once approved, signing works for the granted window.
+An approver must approve the request via the Infisical UI (Cert Manager > Code Signing > Signers > `<signer>` > Approvals tab). Once approved, signing works for the granted window.
 
 </details>
 
-### Approval Modes
+### Request Shape
 
-| Mode | Description |
-|------|-------------|
-| `time-window` | Unlimited signings within a time range |
-| `n-signings` | Fixed number of signing operations |
-| `manual` | Single-use approval, expires after 1 signing |
+Each approval request can be bounded by a signature count, a time window, or both. The Signer's policy sets the ceiling for each (`Signatures per approval`, `Signing window`) — a request that exceeds the policy is rejected with a 400. `justification` is the only required field; omitting a bound falls back to the policy ceiling.
+
+| Field | Description |
+|-------|-------------|
+| `justification` | **Required.** Free-text reason for the request (1–2048 chars), shown to approvers. |
+| `requestedSignings` | How many sign operations the approval permits. Leave empty to fall back to the policy ceiling. |
+| `requestedWindowStart` | ISO 8601 timestamp the access window opens. Defaults to "now". |
+| `requestedWindowEnd` | ISO 8601 timestamp the access window closes. Leave empty to fall back to the policy ceiling. |
+
+#### Admin endpoints
+
+Administrators of a Signer can also pre-approve or revoke requests on behalf of other members:
+
+- `POST /api/v1/cert-manager/signers/{signerId}/requests/pre-approve` — body accepts `granteeUserId` **or** `granteeIdentityId` plus the same `justification` / `requestedSignings` / `requestedWindowStart` / `requestedWindowEnd` fields. Creates a request that is already approved.
+- `POST /api/v1/cert-manager/signers/{signerId}/requests/{requestId}/revoke` — revokes a pending or active request. No body.
 
 ## Troubleshooting
 
@@ -435,10 +440,10 @@ Then monitor: `tail -f /tmp/infisical-pkcs11.log`
 | Error | Cause | Fix |
 |-------|-------|-----|
 | `CKR_GENERAL_ERROR` on init | Config file not found or invalid | Check `INFISICAL_PKCS11_CONFIG` path and JSON syntax |
-| `CKR_GENERAL_ERROR` on sign | Approval required or permission denied | Request approval, or check machine identity permissions |
+| `CKR_GENERAL_ERROR` on sign | Approval required or permission denied | Request approval, or confirm the Machine Identity is a Signer member with the Administrator or Operator role (Auditors cannot sign) |
 | `CKR_USER_NOT_LOGGED_IN` | No credentials or token expired | Set `INFISICAL_UNIVERSAL_AUTH_CLIENT_ID` and `CLIENT_SECRET` |
 | `CKR_PIN_INCORRECT` | Invalid credentials in PIN | Use format `clientId:clientSecret` |
-| `CKR_SLOT_ID_INVALID` | No signers in project | Create a signer in Cert Manager > Code Signing |
+| `CKR_SLOT_ID_INVALID` | No signers visible to this Machine Identity (none exist, or the identity isn't a member of any signer) | Create a signer in Cert Manager > Code Signing, or add this identity as a member on the signer's Members tab |
 | `CKR_DEVICE_ERROR` | Server unreachable | Check `server_url` and network connectivity |
 
 ## Building from Source
@@ -462,11 +467,11 @@ make build-windows-amd64    # requires MinGW
 
 ## Security
 
-- **Private keys never leave Infisical.** All signing happens server-side.
+- **Private keys never leave Infisical.** All signing happens inside Infisical.
 - **Use environment variables for credentials** — avoid committing secrets to config files.
 - If using config-file credentials, restrict permissions: `chmod 600 /etc/infisical/pkcs11.conf`
 - Auth tokens are cached in memory only — never written to disk.
-- Enable [approval policies](https://infisical.com/docs/documentation/platform/pki/code-signing) on signers to require human review before signing.
+- Enable [approval policies](https://infisical.com/docs/documentation/platform/pki/code-signing/approvals) on signers to require human review before signing.
 - Every signing operation is recorded in [Infisical audit logs](https://infisical.com/docs/documentation/platform/audit-logs) with actor, timestamp, and client metadata.
 
 Please do not file GitHub issues or post on public forums for security vulnerabilities. If you believe you have uncovered a vulnerability, contact [security@infisical.com](mailto:security@infisical.com).
