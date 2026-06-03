@@ -1012,8 +1012,7 @@ func (b *InfisicalBackend) signInternal(sess *session, data []byte) ([]byte, err
 		SigningAlgorithm: algorithm,
 		IsDigest:         isDigest,
 		ClientMetadata: map[string]interface{}{
-			"tool":     "pkcs11-module",
-			"version":  version,
+			"tool":     fmt.Sprintf("pkcs11-module/%s", version),
 			"hostname": hostname,
 		},
 	}

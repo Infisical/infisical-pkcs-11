@@ -23,19 +23,16 @@ type InfisicalClient struct {
 }
 
 type signerResponse struct {
-	ID                      string  `json:"id"`
-	Name                    string  `json:"name"`
-	Status                  string  `json:"status"`
-	CertificateID           string  `json:"certificateId"`
-	CertificateKeyAlgorithm *string `json:"certificateKeyAlgorithm"`
-	ApprovalPolicyID        *string `json:"approvalPolicyId"`
+	ID               string  `json:"id"`
+	Name             string  `json:"name"`
+	Status           string  `json:"status"`
+	CertificateID    string  `json:"certificateId"`
+	KeyAlgorithm     string  `json:"keyAlgorithm"`
+	ApprovalPolicyID *string `json:"approvalPolicyId"`
 }
 
 func (s *signerResponse) keyAlgorithm() string {
-	if s.CertificateKeyAlgorithm != nil {
-		return strings.ToLower(*s.CertificateKeyAlgorithm)
-	}
-	return ""
+	return strings.ToLower(s.KeyAlgorithm)
 }
 
 type listSignersResponse struct {
