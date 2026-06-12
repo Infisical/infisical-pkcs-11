@@ -179,6 +179,12 @@ func (b *InfisicalBackend) withRetryOnAuth(fn func(token string) error) error {
 		return err
 	}
 
+	// Token auth uses a static token with nothing to re-authenticate; surface the 401 instead of
+	// silently falling back to any universal-auth credentials left in the environment.
+	if b.isTokenAuth() {
+		return err
+	}
+
 	// 401 — re-authenticate and retry once.
 	b.log.Debug().Msg("Received 401, re-authenticating and retrying")
 
@@ -259,9 +265,9 @@ func (b *InfisicalBackend) GetTokenInfo(slotID uint) (pkcs11.TokenInfo, error) {
 		return pkcs11.TokenInfo{}, err
 	}
 
-	// Don't require login when config provides credentials (auto-auth mode)
+	// The module auto-authenticates when it has universal-auth credentials or a token
 	flags := pkcs11.CKF_TOKEN_INITIALIZED
-	if !b.hasConfigCredentials() {
+	if !b.hasConfigCredentials() && !b.isTokenAuth() {
 		flags |= pkcs11.CKF_LOGIN_REQUIRED
 	}
 
