@@ -79,6 +79,8 @@ func (b *InfisicalBackend) Initialize() error {
 		} else {
 			b.log.Info().Msg("Initialized with universal-auth (auto-authenticated)")
 		}
+	} else if cfg.Auth.Method == authMethodToken && cfg.Auth.Token != "" {
+		b.log.Info().Msg("Initialized with token auth")
 	}
 
 	b.log.Info().Str("version", version).Msg("PKCS#11 module initialized")
@@ -138,6 +140,10 @@ func (b *InfisicalBackend) authenticate(clientID, clientSecret string) error {
 }
 
 func (b *InfisicalBackend) getToken() (string, error) {
+	// Token auth uses the configured access token directly and does not refresh it.
+	if b.isTokenAuth() {
+		return b.config.Auth.Token, nil
+	}
 	token := b.client.GetAccessToken()
 	if token != "" {
 		return token, nil
@@ -278,17 +284,18 @@ func (b *InfisicalBackend) hasConfigCredentials() bool {
 	return b.config.Auth.ClientID != "" && b.config.Auth.ClientSecret != ""
 }
 
+func (b *InfisicalBackend) isTokenAuth() bool {
+	return b.config.Auth.Method == authMethodToken && b.config.Auth.Token != ""
+}
+
 func (b *InfisicalBackend) OpenSession(slotID uint, flags uint) (pkcs11.SessionHandle, error) {
 	if _, err := b.getSignerBySlot(slotID); err != nil {
 		return 0, err
 	}
 	handle := b.sessions.open(slotID)
 
-	// Auto-login when config provides credentials and SDK has a valid token.
-	if b.hasConfigCredentials() {
-		if b.client.GetAccessToken() != "" {
-			b.sessions.setLoggedIn(handle, true)
-		}
+	if b.isTokenAuth() || (b.hasConfigCredentials() && b.client.GetAccessToken() != "") {
+		b.sessions.setLoggedIn(handle, true)
 	}
 
 	b.log.Debug().Uint("slot", slotID).Uint("session", uint(handle)).Msg("Opened session")
@@ -308,6 +315,13 @@ func (b *InfisicalBackend) Login(sh pkcs11.SessionHandle, userType uint, pin str
 	sess, ok := b.sessions.get(sh)
 	if !ok {
 		return ErrSessionHandleInvalid
+	}
+
+	if b.isTokenAuth() {
+		b.sessions.setLoggedIn(sh, true)
+		b.sessions.setAllLoggedInForSlot(sess.slotID, true)
+		b.log.Debug().Uint("slot", sess.slotID).Msg("Login successful (token auth)")
+		return nil
 	}
 
 	// If we already have a valid token (from auto-auth), just mark logged in

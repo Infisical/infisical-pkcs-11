@@ -12,12 +12,16 @@ import (
 )
 
 const (
-	envConfigPath = "INFISICAL_PKCS11_CONFIG"
+	envConfigPath = "INFISICAL_CONFIG"
 	envClientID   = "INFISICAL_UNIVERSAL_AUTH_CLIENT_ID"
 	envSecret     = "INFISICAL_UNIVERSAL_AUTH_CLIENT_SECRET"
-	envServerURL  = "INFISICAL_PKCS11_SERVER_URL"
+	envServerURL  = "INFISICAL_SERVER_URL"
+	envToken      = "INFISICAL_TOKEN"
 
 	defaultConfigPath = "/etc/infisical/pkcs11.conf"
+
+	authMethodUniversalAuth = "universal-auth"
+	authMethodToken         = "token"
 )
 
 type TLSConfig struct {
@@ -35,6 +39,7 @@ type AuthConfig struct {
 	Method       string `json:"method"`
 	ClientID     string `json:"client_id"`
 	ClientSecret string `json:"client_secret"`
+	Token        string `json:"token"`
 }
 
 type ApprovalConfig struct {
@@ -78,6 +83,11 @@ func (c *Config) applyEnvOverrides() {
 	if v := os.Getenv(envSecret); v != "" {
 		c.Auth.ClientSecret = v
 	}
+	// A token in the environment selects token auth and takes precedence over Universal Auth.
+	if v := os.Getenv(envToken); v != "" {
+		c.Auth.Token = v
+		c.Auth.Method = authMethodToken
+	}
 }
 
 func parseDuration(s string) (time.Duration, error) {
@@ -107,10 +117,17 @@ func (c *Config) validate() error {
 		return fmt.Errorf("server_url must include a host")
 	}
 	if c.Auth.Method == "" {
-		c.Auth.Method = "universal-auth"
+		c.Auth.Method = authMethodUniversalAuth
 	}
-	if c.Auth.Method != "universal-auth" {
-		return fmt.Errorf("unsupported auth method: %s (must be 'universal-auth')", c.Auth.Method)
+	switch c.Auth.Method {
+	case authMethodUniversalAuth:
+		// Client credentials are validated lazily at login time.
+	case authMethodToken:
+		if c.Auth.Token == "" {
+			return fmt.Errorf("auth method is 'token' but no token was provided: set %s", envToken)
+		}
+	default:
+		return fmt.Errorf("unsupported auth method: %s (must be 'universal-auth' or 'token')", c.Auth.Method)
 	}
 	if c.Approval.SigningDuration != "" {
 		d, err := parseDuration(c.Approval.SigningDuration)

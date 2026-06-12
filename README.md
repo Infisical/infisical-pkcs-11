@@ -46,7 +46,7 @@ Each **Signer** in your Infisical project appears as a PKCS#11 **slot**, exposin
 - An Infisical instance with the **Cert Manager** product enabled
 - At least one **Signer** created (Cert Manager > Code Signing > Signers)
 - The Signer must be backed by an Internal CA, AWS Private CA, or Azure AD CS
-- A **Machine Identity** configured for Universal Auth, added as a member of the Signer with the Administrator or Operator role. Membership is configured on the signer's Members tab.
+- A way to authenticate as a member of the Signer with the Administrator or Operator role (the signer's Members tab): either a **Machine Identity** with Universal Auth, or an Infisical **access token** (a user's or a machine identity's). See [Authentication](#authentication).
 - If using approval policies: an approved sign request for the signer before signing
 
 ## Quick Start
@@ -71,7 +71,7 @@ make build
 
 ### 2. Configure
 
-Create `/etc/infisical/pkcs11.conf` (or set `INFISICAL_PKCS11_CONFIG` to a custom path):
+Create `/etc/infisical/pkcs11.conf` (or set `INFISICAL_CONFIG` to a custom path):
 
 ```json
 {
@@ -112,18 +112,21 @@ The module reads a JSON config file and environment variables. Environment varia
 
 | Variable | Description |
 |----------|-------------|
-| `INFISICAL_UNIVERSAL_AUTH_CLIENT_ID` | Machine Identity client ID |
-| `INFISICAL_UNIVERSAL_AUTH_CLIENT_SECRET` | Machine Identity client secret |
-| `INFISICAL_PKCS11_CONFIG` | Path to config file (default: `/etc/infisical/pkcs11.conf`) |
-| `INFISICAL_PKCS11_SERVER_URL` | Override `server_url` from config file |
+| `INFISICAL_UNIVERSAL_AUTH_CLIENT_ID` | Machine Identity client ID (Universal Auth) |
+| `INFISICAL_UNIVERSAL_AUTH_CLIENT_SECRET` | Machine Identity client secret (Universal Auth) |
+| `INFISICAL_TOKEN` | An Infisical access token (a user or machine identity token). Selects token auth; used instead of Universal Auth credentials |
+| `INFISICAL_CONFIG` | Path to config file (default: `/etc/infisical/pkcs11.conf`) |
+| `INFISICAL_SERVER_URL` | Override `server_url` from config file |
 
 ### Config File
 
 | Field | Required | Default | Description |
 |-------|----------|---------|-------------|
 | `server_url` | Yes | — | Infisical server URL |
-| `auth.client_id` | No | — | Machine Identity client ID (prefer env var) |
-| `auth.client_secret` | No | — | Machine Identity client secret (prefer env var) |
+| `auth.method` | No | `universal-auth` | Authentication method: `universal-auth` or `token` |
+| `auth.client_id` | No | (none) | Machine Identity client ID, for `universal-auth` (prefer env var) |
+| `auth.client_secret` | No | (none) | Machine Identity client secret, for `universal-auth` (prefer env var) |
+| `auth.token` | No | (none) | Infisical access token, for `token` auth (prefer the env var) |
 | `tls.ca_cert_path` | No | — | Custom CA certificate for self-hosted instances |
 | `tls.skip_verify` | No | `false` | Skip TLS verification (development only) |
 | `cache.token_ttl_seconds` | No | `300` | Auth token cache duration |
@@ -166,7 +169,9 @@ The module reads a JSON config file and environment variables. Environment varia
 
 ### Authentication
 
-The module uses **[Universal Auth](https://infisical.com/docs/documentation/platform/identities/universal-auth)** (Machine Identity) to authenticate with Infisical. Credentials can be provided in three ways (in order of precedence):
+The module supports two ways to authenticate with Infisical.
+
+**Universal Auth (Machine Identity)** is the default. The module exchanges the client ID/secret for an access token and refreshes it automatically. Provide the credentials three ways (in order of precedence):
 
 1. **Environment variables** (recommended for CI/CD and production):
    ```bash
@@ -187,6 +192,16 @@ The module uses **[Universal Auth](https://infisical.com/docs/documentation/plat
 3. **PIN at login time** — tools that call `C_Login` can pass credentials as the PIN in the format `clientId:clientSecret`.
 
 When credentials are available, the module auto-authenticates during initialization — no explicit `C_Login` is needed from tools.
+
+**Token auth** uses an Infisical access token directly, either a user's token or a machine identity's. Setting `INFISICAL_TOKEN` selects it:
+
+```bash
+export INFISICAL_TOKEN="your-access-token"
+```
+
+> **Token auth is temporary.** The module uses the token as-is and does not refresh it. When the token expires, signing fails until you set a new token.
+
+Environment variables take precedence over the config file, and `INFISICAL_TOKEN` takes precedence over Universal Auth credentials.
 
 ## Tool Integration Guides
 
@@ -235,7 +250,7 @@ jarsigner -keystore NONE -storetype PKCS11 \
 <summary>Windows (PowerShell)</summary>
 
 ```powershell
-$env:INFISICAL_PKCS11_CONFIG = "C:\path\to\pkcs11.conf"
+$env:INFISICAL_CONFIG = "C:\path\to\pkcs11.conf"
 $env:INFISICAL_UNIVERSAL_AUTH_CLIENT_ID = "your-client-id"
 $env:INFISICAL_UNIVERSAL_AUTH_CLIENT_SECRET = "your-client-secret"
 
@@ -272,7 +287,7 @@ osslsigncode sign \
 ### signtool (Windows Authenticode)
 
 ```powershell
-$env:INFISICAL_PKCS11_CONFIG = "C:\path\to\pkcs11.conf"
+$env:INFISICAL_CONFIG = "C:\path\to\pkcs11.conf"
 $env:INFISICAL_UNIVERSAL_AUTH_CLIENT_ID = "your-client-id"
 $env:INFISICAL_UNIVERSAL_AUTH_CLIENT_SECRET = "your-client-secret"
 
@@ -439,7 +454,7 @@ Then monitor: `tail -f /tmp/infisical-pkcs11.log`
 
 | Error | Cause | Fix |
 |-------|-------|-----|
-| `CKR_GENERAL_ERROR` on init | Config file not found or invalid | Check `INFISICAL_PKCS11_CONFIG` path and JSON syntax |
+| `CKR_GENERAL_ERROR` on init | Config file not found or invalid | Check `INFISICAL_CONFIG` path and JSON syntax |
 | `CKR_GENERAL_ERROR` on sign | Approval required or permission denied | Request approval, or confirm the Machine Identity is a Signer member with the Administrator or Operator role (Auditors cannot sign) |
 | `CKR_USER_NOT_LOGGED_IN` | No credentials or token expired | Set `INFISICAL_UNIVERSAL_AUTH_CLIENT_ID` and `CLIENT_SECRET` |
 | `CKR_PIN_INCORRECT` | Invalid credentials in PIN | Use format `clientId:clientSecret` |

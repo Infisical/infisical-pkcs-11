@@ -121,6 +121,45 @@ func TestLoadConfigEnvOverrides(t *testing.T) {
 	}
 }
 
+func TestLoadConfigTokenAuthFromFile(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "pkcs11.conf")
+	configJSON := `{"server_url":"https://app.infisical.com","auth":{"method":"token","token":"jwt-abc"}}`
+	if err := os.WriteFile(configPath, []byte(configJSON), 0600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(envConfigPath, configPath)
+
+	cfg, err := loadConfig()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.Auth.Method != authMethodToken || cfg.Auth.Token != "jwt-abc" {
+		t.Errorf("token auth not loaded: %+v", cfg.Auth)
+	}
+}
+
+func TestLoadConfigTokenEnvSelectsTokenAuth(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "pkcs11.conf")
+	if err := os.WriteFile(configPath, []byte(`{"server_url":"https://app.infisical.com"}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(envConfigPath, configPath)
+	t.Setenv(envToken, "jwt-from-env")
+
+	cfg, err := loadConfig()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.Auth.Method != authMethodToken {
+		t.Errorf("env token should select token auth, got method %q", cfg.Auth.Method)
+	}
+	if cfg.Auth.Token != "jwt-from-env" {
+		t.Errorf("token from env = %q", cfg.Auth.Token)
+	}
+}
+
 func TestLoadConfigValidation(t *testing.T) {
 	dir := t.TempDir()
 	configPath := filepath.Join(dir, "pkcs11.conf")
