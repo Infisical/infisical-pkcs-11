@@ -121,8 +121,10 @@ func (c *Config) validate() error {
 	}
 	switch c.Auth.Method {
 	case authMethodUniversalAuth:
-		// Client credentials are validated lazily at login time.
+		// Client credentials may also be supplied at runtime via the C_Login PIN
+		// ("clientId:clientSecret"), so they can be absent here and are validated at login time.
 	case authMethodToken:
+		// A token has no runtime-supply path (config/env)
 		if c.Auth.Token == "" {
 			return fmt.Errorf("auth method is 'token' but no token was provided: set %s", envToken)
 		}

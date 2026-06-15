@@ -116,7 +116,7 @@ The module reads a JSON config file and environment variables. Environment varia
 | `INFISICAL_UNIVERSAL_AUTH_CLIENT_SECRET` | Machine Identity client secret (Universal Auth) |
 | `INFISICAL_TOKEN` | An Infisical access token (a user or machine identity token). Selects token auth; used instead of Universal Auth credentials |
 | `INFISICAL_CONFIG` | Path to config file (default: `/etc/infisical/pkcs11.conf`) |
-| `INFISICAL_SERVER_URL` | Override `server_url` from config file |
+| `INFISICAL_SERVER_URL` | The Infisical instance URL. Sets `server_url` (and overrides the config file) |
 
 ### Config File
 
