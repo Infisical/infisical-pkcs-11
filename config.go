@@ -117,17 +117,14 @@ func (c *Config) validate() error {
 		return fmt.Errorf("server_url must include a host")
 	}
 	if c.Auth.Method == "" {
-		c.Auth.Method = authMethodUniversalAuth
+		if c.Auth.Token != "" {
+			c.Auth.Method = authMethodToken
+		} else {
+			c.Auth.Method = authMethodUniversalAuth
+		}
 	}
 	switch c.Auth.Method {
-	case authMethodUniversalAuth:
-		// Client credentials may also be supplied at runtime via the C_Login PIN
-		// ("clientId:clientSecret"), so they can be absent here and are validated at login time.
-	case authMethodToken:
-		// A token has no runtime-supply path (config/env)
-		if c.Auth.Token == "" {
-			return fmt.Errorf("auth method is 'token' but no token was provided: set %s", envToken)
-		}
+	case authMethodUniversalAuth, authMethodToken:
 	default:
 		return fmt.Errorf("unsupported auth method: %s (must be 'universal-auth' or 'token')", c.Auth.Method)
 	}

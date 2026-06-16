@@ -123,7 +123,7 @@ The module reads a JSON config file and environment variables. Environment varia
 | Field | Required | Default | Description |
 |-------|----------|---------|-------------|
 | `server_url` | Yes | — | Infisical server URL |
-| `auth.method` | No | `universal-auth` | Authentication method: `universal-auth` or `token` |
+| `auth.method` | No | inferred | Authentication method: `universal-auth` or `token`. Inferred from the credentials when unset (a token means `token`, otherwise `universal-auth`) |
 | `auth.client_id` | No | (none) | Machine Identity client ID, for `universal-auth` (prefer env var) |
 | `auth.client_secret` | No | (none) | Machine Identity client secret, for `universal-auth` (prefer env var) |
 | `auth.token` | No | (none) | Infisical access token, for `token` auth (prefer the env var) |
@@ -193,11 +193,18 @@ The module supports two ways to authenticate with Infisical.
 
 When credentials are available, the module auto-authenticates during initialization — no explicit `C_Login` is needed from tools.
 
-**Token auth** uses an Infisical access token directly, either a user's token or a machine identity's. Setting `INFISICAL_TOKEN` selects it:
+**Token auth** uses an Infisical access token directly, either a user's token or a machine identity's. Provide the token three ways (in order of precedence):
 
-```bash
-export INFISICAL_TOKEN="your-access-token"
-```
+1. **Environment variable** (selects token auth automatically):
+   ```bash
+   export INFISICAL_TOKEN="your-access-token"
+   ```
+
+2. **Config file**: set `auth.token` (token auth is selected automatically).
+
+3. **PIN at login time**: tools that call `C_Login` can pass the token as the PIN. The module detects the PIN type automatically: a `clientId:clientSecret` PIN selects universal-auth, anything else is treated as an access token.
+
+> **We recommend the environment or config.** The `C_Login` PIN is an alternative that works only with tools that hand it over before they list keys. Many tools list and open a key (`C_GetSlotList`, `C_OpenSession`) first and call `C_Login` afterwards, so for those use the environment or config instead.
 
 > **Token auth is temporary.** The module uses the token as-is and does not refresh it. When the token expires, signing fails until you set a new token.
 
@@ -457,7 +464,7 @@ Then monitor: `tail -f /tmp/infisical-pkcs11.log`
 | `CKR_GENERAL_ERROR` on init | Config file not found or invalid | Check `INFISICAL_CONFIG` path and JSON syntax |
 | `CKR_GENERAL_ERROR` on sign | Approval required or permission denied | Request approval, or confirm the Machine Identity is a Signer member with the Administrator or Operator role (Auditors cannot sign) |
 | `CKR_USER_NOT_LOGGED_IN` | No credentials or token expired | Set `INFISICAL_UNIVERSAL_AUTH_CLIENT_ID` and `CLIENT_SECRET` |
-| `CKR_PIN_INCORRECT` | Invalid credentials in PIN | Use format `clientId:clientSecret` |
+| `CKR_PIN_INCORRECT` | Invalid credentials in PIN | For universal-auth use the format `clientId:clientSecret`; for token auth pass the access token as the PIN |
 | `CKR_SLOT_ID_INVALID` | No signers visible to this Machine Identity (none exist, or the identity isn't a member of any signer) | Create a signer in Cert Manager > Code Signing, or add this identity as a member on the signer's Members tab |
 | `CKR_DEVICE_ERROR` | Server unreachable | Check `server_url` and network connectivity |
 

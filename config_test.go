@@ -139,6 +139,25 @@ func TestLoadConfigTokenAuthFromFile(t *testing.T) {
 	}
 }
 
+func TestLoadConfigTokenInferredFromTokenField(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "pkcs11.conf")
+	// No auth.method set: a token in the config should select token auth on its own.
+	configJSON := `{"server_url":"https://app.infisical.com","auth":{"token":"jwt-abc"}}`
+	if err := os.WriteFile(configPath, []byte(configJSON), 0600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(envConfigPath, configPath)
+
+	cfg, err := loadConfig()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.Auth.Method != authMethodToken {
+		t.Errorf("token in config should infer token auth, got method %q", cfg.Auth.Method)
+	}
+}
+
 func TestLoadConfigTokenEnvSelectsTokenAuth(t *testing.T) {
 	dir := t.TempDir()
 	configPath := filepath.Join(dir, "pkcs11.conf")
