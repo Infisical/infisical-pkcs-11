@@ -79,6 +79,8 @@ func (b *InfisicalBackend) Initialize() error {
 		} else {
 			b.log.Info().Msg("Initialized with universal-auth (auto-authenticated)")
 		}
+	} else if cfg.Auth.Method == authMethodToken && cfg.Auth.Token != "" {
+		b.log.Info().Msg("Initialized with token auth")
 	}
 
 	b.log.Info().Str("version", version).Msg("PKCS#11 module initialized")
@@ -138,6 +140,12 @@ func (b *InfisicalBackend) authenticate(clientID, clientSecret string) error {
 }
 
 func (b *InfisicalBackend) getToken() (string, error) {
+	if b.config.Auth.Method == authMethodToken {
+		if b.config.Auth.Token == "" {
+			return "", fmt.Errorf("token auth: no token provided; pass it as the C_Login PIN or set %s", envToken)
+		}
+		return b.config.Auth.Token, nil
+	}
 	token := b.client.GetAccessToken()
 	if token != "" {
 		return token, nil
@@ -170,6 +178,12 @@ func (b *InfisicalBackend) withRetryOnAuth(fn func(token string) error) error {
 
 	var apiErr *APIError
 	if !errors.As(err, &apiErr) || apiErr.StatusCode != 401 {
+		return err
+	}
+
+	// Token auth uses a static token with nothing to re-authenticate; surface the 401 instead of
+	// silently falling back to any universal-auth credentials left in the environment.
+	if b.config.Auth.Method == authMethodToken {
 		return err
 	}
 
@@ -253,9 +267,9 @@ func (b *InfisicalBackend) GetTokenInfo(slotID uint) (pkcs11.TokenInfo, error) {
 		return pkcs11.TokenInfo{}, err
 	}
 
-	// Don't require login when config provides credentials (auto-auth mode)
+	// The module auto-authenticates when it has universal-auth credentials or a token
 	flags := pkcs11.CKF_TOKEN_INITIALIZED
-	if !b.hasConfigCredentials() {
+	if !b.hasConfigCredentials() && !b.isTokenAuth() {
 		flags |= pkcs11.CKF_LOGIN_REQUIRED
 	}
 
@@ -267,7 +281,7 @@ func (b *InfisicalBackend) GetTokenInfo(slotID uint) (pkcs11.TokenInfo, error) {
 		Flags:           uint(flags),
 		MaxSessionCount: 64,
 		SessionCount:    0,
-		MaxPinLen:       256,
+		MaxPinLen:       4096,
 		MinPinLen:       1,
 		HardwareVersion: pkcs11.Version{Major: 1, Minor: 0},
 		FirmwareVersion: pkcs11.Version{Major: 1, Minor: 0},
@@ -278,17 +292,18 @@ func (b *InfisicalBackend) hasConfigCredentials() bool {
 	return b.config.Auth.ClientID != "" && b.config.Auth.ClientSecret != ""
 }
 
+func (b *InfisicalBackend) isTokenAuth() bool {
+	return b.config.Auth.Method == authMethodToken && b.config.Auth.Token != ""
+}
+
 func (b *InfisicalBackend) OpenSession(slotID uint, flags uint) (pkcs11.SessionHandle, error) {
 	if _, err := b.getSignerBySlot(slotID); err != nil {
 		return 0, err
 	}
 	handle := b.sessions.open(slotID)
 
-	// Auto-login when config provides credentials and SDK has a valid token.
-	if b.hasConfigCredentials() {
-		if b.client.GetAccessToken() != "" {
-			b.sessions.setLoggedIn(handle, true)
-		}
+	if b.isTokenAuth() || (b.hasConfigCredentials() && b.client.GetAccessToken() != "") {
+		b.sessions.setLoggedIn(handle, true)
 	}
 
 	b.log.Debug().Uint("slot", slotID).Uint("session", uint(handle)).Msg("Opened session")
@@ -302,51 +317,68 @@ func (b *InfisicalBackend) CloseSession(sh pkcs11.SessionHandle) error {
 	return nil
 }
 
-// Login handles C_Login. PIN can be "clientId:clientSecret" or empty
-// (falls back to config credentials).
 func (b *InfisicalBackend) Login(sh pkcs11.SessionHandle, userType uint, pin string) error {
 	sess, ok := b.sessions.get(sh)
 	if !ok {
 		return ErrSessionHandleInvalid
 	}
 
-	// If we already have a valid token (from auto-auth), just mark logged in
+	if pin != "" {
+		if clientID, clientSecret, isCreds := splitClientCreds(pin); isCreds {
+			if err := b.authenticate(clientID, clientSecret); err != nil {
+				b.log.Warn().Err(err).Msg("Login failed")
+				return err
+			}
+			b.sessions.setLoggedIn(sh, true)
+			b.sessions.setAllLoggedInForSlot(sess.slotID, true)
+			b.log.Debug().Uint("slot", sess.slotID).Msg("Login successful (universal-auth via PIN)")
+			return nil
+		}
+		b.config.Auth.Method = authMethodToken
+		b.config.Auth.Token = pin
+		b.sessions.setLoggedIn(sh, true)
+		b.sessions.setAllLoggedInForSlot(sess.slotID, true)
+		b.log.Debug().Uint("slot", sess.slotID).Msg("Login successful (token via PIN)")
+		return nil
+	}
+
+	// No PIN: fall back to the configured credentials.
+	if b.config.Auth.Method == authMethodToken {
+		if b.config.Auth.Token == "" {
+			return fmt.Errorf("token auth: no token provided; pass it as the PIN or set %s", envToken)
+		}
+		b.sessions.setLoggedIn(sh, true)
+		b.sessions.setAllLoggedInForSlot(sess.slotID, true)
+		b.log.Debug().Uint("slot", sess.slotID).Msg("Login successful (token auth)")
+		return nil
+	}
+
+	// Universal auth: reuse a cached token from auto-auth, otherwise log in with config credentials.
 	if b.client.GetAccessToken() != "" && b.hasConfigCredentials() {
 		b.sessions.setLoggedIn(sh, true)
 		b.sessions.setAllLoggedInForSlot(sess.slotID, true)
 		b.log.Debug().Uint("slot", sess.slotID).Msg("Login successful (cached token)")
 		return nil
 	}
-
-	// Try to parse PIN as clientId:clientSecret
-	var clientID, clientSecret string
-	if pin != "" {
-		parts := strings.SplitN(pin, ":", 2)
-		if len(parts) == 2 && parts[0] != "" && parts[1] != "" {
-			clientID = parts[0]
-			clientSecret = parts[1]
-		}
+	if b.config.Auth.ClientID == "" {
+		return fmt.Errorf("no credentials: provide a PIN (clientId:clientSecret or an access token), or configure them")
 	}
-
-	// Fall back to config credentials
-	if clientID == "" && b.config.Auth.ClientID != "" {
-		clientID = b.config.Auth.ClientID
-		clientSecret = b.config.Auth.ClientSecret
-	}
-
-	if clientID == "" {
-		return fmt.Errorf("no credentials: provide PIN as clientId:clientSecret or configure in config file")
-	}
-
-	if err := b.authenticate(clientID, clientSecret); err != nil {
+	if err := b.authenticate(b.config.Auth.ClientID, b.config.Auth.ClientSecret); err != nil {
 		b.log.Warn().Err(err).Msg("Login failed")
 		return err
 	}
-
 	b.sessions.setLoggedIn(sh, true)
 	b.sessions.setAllLoggedInForSlot(sess.slotID, true)
 	b.log.Info().Uint("slot", sess.slotID).Msg("Login successful")
 	return nil
+}
+
+func splitClientCreds(pin string) (clientID, clientSecret string, ok bool) {
+	parts := strings.SplitN(pin, ":", 2)
+	if len(parts) == 2 && parts[0] != "" && parts[1] != "" {
+		return parts[0], parts[1], true
+	}
+	return "", "", false
 }
 
 func (b *InfisicalBackend) Logout(sh pkcs11.SessionHandle) error {
