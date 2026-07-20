@@ -64,6 +64,8 @@ func TestMapAPIError(t *testing.T) {
 		{"plain 400 -> DATA_INVALID", &APIError{StatusCode: 400, Message: "Data exceeds maximum size"}, pkcs11.CKR_DATA_INVALID},
 		{"401 -> USER_NOT_LOGGED_IN", &APIError{StatusCode: 401, Message: "unauthorized"}, pkcs11.CKR_USER_NOT_LOGGED_IN},
 		{"500 -> DEVICE_ERROR", &APIError{StatusCode: 500, Message: "internal"}, pkcs11.CKR_DEVICE_ERROR},
+		{"401 with mechanism message stays USER_NOT_LOGGED_IN", &APIError{StatusCode: 401, Message: "Mechanism not supported"}, pkcs11.CKR_USER_NOT_LOGGED_IN},
+		{"403 with mechanism message stays GENERAL_ERROR", &APIError{StatusCode: 403, Message: "algorithm not supported for this context"}, pkcs11.CKR_GENERAL_ERROR},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

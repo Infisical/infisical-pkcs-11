@@ -66,7 +66,7 @@ func isUnsupportedMechanismMessage(msg string) bool {
 }
 
 func mapAPIError(apiErr *APIError) uint {
-	if isUnsupportedMechanismMessage(apiErr.Message) {
+	if apiErr.StatusCode == 400 && isUnsupportedMechanismMessage(apiErr.Message) {
 		return pkcs11.CKR_MECHANISM_INVALID
 	}
 	return mapHTTPError(apiErr.StatusCode)
