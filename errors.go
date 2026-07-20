@@ -3,6 +3,7 @@ package main
 import (
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/miekg/pkcs11"
 )
@@ -51,6 +52,24 @@ func (e *RequestError) Error() string {
 
 func (e *RequestError) Unwrap() error {
 	return e.Err
+}
+
+func isUnsupportedMechanismMessage(msg string) bool {
+	m := strings.ToLower(msg)
+	if strings.Contains(m, "mechanism_invalid") {
+		return true
+	}
+	if !strings.Contains(m, "mechanism") && !strings.Contains(m, "algorithm") {
+		return false
+	}
+	return strings.Contains(m, "not supported") || strings.Contains(m, "does not support") || strings.Contains(m, "unsupported")
+}
+
+func mapAPIError(apiErr *APIError) uint {
+	if isUnsupportedMechanismMessage(apiErr.Message) {
+		return pkcs11.CKR_MECHANISM_INVALID
+	}
+	return mapHTTPError(apiErr.StatusCode)
 }
 
 func mapHTTPError(statusCode int) uint {

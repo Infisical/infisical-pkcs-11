@@ -777,7 +777,7 @@ func mapErrorToRV(err error) C.CK_RV {
 	// Check API errors
 	var apiErr *APIError
 	if errors.As(err, &apiErr) {
-		return C.CK_RV(mapHTTPError(apiErr.StatusCode))
+		return C.CK_RV(mapAPIError(apiErr))
 	}
 	return C.CKR_GENERAL_ERROR
 }
