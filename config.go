@@ -18,7 +18,7 @@ const (
 	envServerURL  = "INFISICAL_SERVER_URL"
 	envToken      = "INFISICAL_TOKEN"
 
-	defaultConfigPath = "/etc/infisical/pkcs11.conf"
+	unixDefaultConfigPath = "/etc/infisical/pkcs11.conf"
 
 	authMethodUniversalAuth = "universal-auth"
 	authMethodToken         = "token"
@@ -143,10 +143,24 @@ func (c *Config) validate() error {
 	return nil
 }
 
+func defaultConfigPath() string {
+	return defaultConfigPathFor(runtime.GOOS, os.Getenv("ProgramData"))
+}
+
+func defaultConfigPathFor(goos, programData string) string {
+	if goos != "windows" {
+		return unixDefaultConfigPath
+	}
+	if programData == "" {
+		programData = `C:\ProgramData`
+	}
+	return programData + `\Infisical\pkcs11.conf`
+}
+
 func loadConfig() (*Config, error) {
 	path := os.Getenv(envConfigPath)
 	if path == "" {
-		path = defaultConfigPath
+		path = defaultConfigPath()
 	}
 
 	// Check file permissions on Unix systems (warn if world-readable)

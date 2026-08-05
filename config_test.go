@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 )
 
@@ -235,5 +236,31 @@ func TestLoadConfigValidation(t *testing.T) {
 				t.Errorf("unexpected error: %v", err)
 			}
 		})
+	}
+}
+
+func TestDefaultConfigPathFor(t *testing.T) {
+	cases := []struct {
+		name        string
+		goos        string
+		programData string
+		want        string
+	}{
+		{"linux", "linux", "", unixDefaultConfigPath},
+		{"darwin", "darwin", `C:\ProgramData`, unixDefaultConfigPath},
+		{"windows", "windows", `D:\Data`, `D:\Data\Infisical\pkcs11.conf`},
+		{"windows without ProgramData set", "windows", "", `C:\ProgramData\Infisical\pkcs11.conf`},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := defaultConfigPathFor(c.goos, c.programData); got != c.want {
+				t.Fatalf("defaultConfigPathFor(%q, %q) = %q, want %q", c.goos, c.programData, got, c.want)
+			}
+		})
+	}
+
+	if got := defaultConfigPath(); got != defaultConfigPathFor(runtime.GOOS, os.Getenv("ProgramData")) {
+		t.Fatalf("defaultConfigPath() disagrees with defaultConfigPathFor: %q", got)
 	}
 }

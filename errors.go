@@ -3,6 +3,7 @@ package main
 import (
 	"errors"
 	"fmt"
+	"net/http"
 	"strings"
 
 	"github.com/miekg/pkcs11"
@@ -24,6 +25,13 @@ type APIError struct {
 	StatusCode int
 	Message    string
 	Operation  string
+	Code       string
+}
+
+const ErrorCodeApprovalRequired = "ApprovalRequired"
+
+func (e *APIError) IsApprovalRequired() bool {
+	return e.StatusCode == http.StatusForbidden && e.Code == ErrorCodeApprovalRequired
 }
 
 func (e *APIError) Error() string {
@@ -31,14 +39,6 @@ func (e *APIError) Error() string {
 		return fmt.Sprintf("%s: API error %d: %s", e.Operation, e.StatusCode, e.Message)
 	}
 	return fmt.Sprintf("API error %d: %s", e.StatusCode, e.Message)
-}
-
-func NewAPIError(operation string, statusCode int, message string) *APIError {
-	return &APIError{
-		StatusCode: statusCode,
-		Message:    message,
-		Operation:  operation,
-	}
 }
 
 type RequestError struct {

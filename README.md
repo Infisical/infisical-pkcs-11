@@ -71,7 +71,7 @@ make build
 
 ### 2. Configure
 
-Create `/etc/infisical/pkcs11.conf` (or set `INFISICAL_CONFIG` to a custom path):
+Create `/etc/infisical/pkcs11.conf` (`%ProgramData%\Infisical\pkcs11.conf` on Windows), or set `INFISICAL_CONFIG` to a custom path:
 
 ```json
 {
@@ -115,7 +115,7 @@ The module reads a JSON config file and environment variables. Environment varia
 | `INFISICAL_UNIVERSAL_AUTH_CLIENT_ID` | Machine Identity client ID (Universal Auth) |
 | `INFISICAL_UNIVERSAL_AUTH_CLIENT_SECRET` | Machine Identity client secret (Universal Auth) |
 | `INFISICAL_TOKEN` | An Infisical access token (a user or machine identity token). Selects token auth; used instead of Universal Auth credentials |
-| `INFISICAL_CONFIG` | Path to config file (default: `/etc/infisical/pkcs11.conf`) |
+| `INFISICAL_CONFIG` | Path to config file (default: `/etc/infisical/pkcs11.conf`, or `%ProgramData%\Infisical\pkcs11.conf` on Windows) |
 | `INFISICAL_SERVER_URL` | The Infisical instance URL. Sets `server_url` (and overrides the config file) |
 
 ### Config File
@@ -132,7 +132,7 @@ The module reads a JSON config file and environment variables. Environment varia
 | `cache.token_ttl_seconds` | No | `300` | Auth token cache duration |
 | `cache.cert_ttl_seconds` | No | `3600` | Certificate data cache duration |
 | `cache.signer_ttl_seconds` | No | `300` | Signer list cache duration |
-| `approval.signing_duration` | No | — | Auto-request approval with this time window (e.g. `"8h"`, `"30m"`, `"2d"`). Range: 1m–30d |
+| `approval.signing_duration` | No | — | Auto-request approval with this time window (`"30m"`, `"8h"`, `"2d"`). The module accepts 1m to 30d as a sanity check; the real limit is the signer's approval policy, which rejects a request asking for longer. The window starts when the request is opened, not when it is approved, so allow for approval time |
 | `approval.signing_count` | No | — | Auto-request approval for this many signings |
 | `log_level` | No | `info` | Log verbosity: `trace`, `debug`, `info`, `warn`, `error` |
 | `log_file` | No | stderr | Path to log file |
@@ -394,6 +394,29 @@ When `approval.signing_duration` and/or `approval.signing_count` are configured,
 
 Once an approver approves the request (via the Infisical UI at Cert Manager > Code Signing > Signers > `<signer>` > Approvals tab), retrying the sign operation will succeed.
 
+The auto-created request is [scoped](https://infisical.com/docs/documentation/platform/pki/code-signing/approvals#scoping-an-approval) to the signing situation the module observed, so an approver reviews the real command and artifact instead of a blank request. It declares:
+
+| Parameter | Captured from |
+|-----------|---------------|
+| Command | The host process command line. Values of recognised credential arguments are redacted before the command leaves the host: the common password flags (`-storepass`, `-keypass`, `-pass`, `-pin`, `/p`, `--password`, ...) and any argument whose name ends in `password` or `passphrase`, including property forms such as `-Psigning.password=`, `-Dsigning.keyPassword=` and `/p:Password=`. Recognition is best-effort, so review your own command lines |
+| Signing application | The host process executable name, plus its SHA-256 checksum |
+| Hostname | The machine the module runs on |
+| OS username | The account running the signing tool |
+| Data digest | SHA-256 of the payload the denied call submitted. Tools submit a digest of the file, so this is not `sha256sum yourfile` |
+
+The module does not declare an IP address. To limit an approval to one, set it on the request in Infisical.
+
+Two things to know before relying on this:
+
+- **The request is pinned to one payload**, so each artifact needs its own approval and `signing_count` above 1 only allows re-signing the same artifact. Widen the scope in Infisical when one approval should cover a batch.
+- **The command is compared exactly**, apart from whitespace. Reordering the flags, a different path to the tool, a changed or added argument, writing `--flag value` as `--flag=value`, a per-build temporary path, or a tool upgrade (its checksum changes) all produce a new request.
+
+Retrying a denied command does not pile up duplicate requests. The server treats a pending request from the same requester as the same ask when its scope, its signature count and the length of its signing window all match, so a retry resumes that request instead of opening another and notifying approvers again.
+
+This holds for a Machine Identity, which is the intended setup for automation. If you set `INFISICAL_TOKEN` to a **user** token instead, each retry opens its own request, because requests made by a person are matched on the exact window rather than its length.
+
+> **What leaves the host:** the command line, executable checksum, hostname and OS account are sent on every sign call and stored on the approval record, where approvers and auditors can read them. Credential redaction is best-effort pattern matching, so check your own commands for sensitive arguments it would not recognise before enabling this.
+
 <details>
 <summary>Requesting approval via API</summary>
 
@@ -436,6 +459,8 @@ Each approval request can be bounded by a signature count, a time window, or bot
 | `requestedSignings` | How many sign operations the approval permits. Leave empty to fall back to the policy ceiling. |
 | `requestedWindowStart` | ISO 8601 timestamp the access window opens. Defaults to "now". |
 | `requestedWindowEnd` | ISO 8601 timestamp the access window closes. Leave empty to fall back to the policy ceiling. |
+| `scope` | Optional object scoping the approval (`command`, `signingApplication`, `signingApplicationHash`, `hostname`, `osUsername`, `dataHash`). Every value you declare must match exactly at sign time or the call is denied; parameters you omit are unrestricted. `dataHash` is compared against the digest of the submitted payload, so it holds even if a caller reports something else. |
+| `restrictToRequestIp` | Optional boolean. Scopes the approval to the address the request arrives from, read by Infisical rather than supplied by the caller. An address cannot be declared directly. |
 
 #### Admin endpoints
 

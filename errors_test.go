@@ -75,3 +75,53 @@ func TestMapAPIError(t *testing.T) {
 		})
 	}
 }
+
+func TestIsApprovalRequired(t *testing.T) {
+	cases := []struct {
+		name string
+		err  *APIError
+		want bool
+	}{
+		// Bodies captured from a live instance: the sign route sets error to the thrown error's
+		// name, which is why the code is authoritative here.
+		{"403 approval required", &APIError{StatusCode: 403, Code: "ApprovalRequired"}, true},
+		{"403 generic forbidden name", &APIError{StatusCode: 403, Code: "ForbiddenError"}, false},
+		{"403 permission denied", &APIError{StatusCode: 403, Code: "PermissionDenied"}, false},
+		{"403 token error", &APIError{StatusCode: 403, Code: "TokenError"}, false},
+		{"403 with no code (proxy or WAF, not Infisical)", &APIError{StatusCode: 403, Code: ""}, false},
+		{"401", &APIError{StatusCode: 401, Code: "ApprovalRequired"}, false},
+		{"404", &APIError{StatusCode: 404, Code: ""}, false},
+		{"500", &APIError{StatusCode: 500, Code: ""}, false},
+	}
+	for _, c := range cases {
+		if got := c.err.IsApprovalRequired(); got != c.want {
+			t.Errorf("%s: IsApprovalRequired() = %v, want %v", c.name, got, c.want)
+		}
+	}
+}
+
+func TestRedactionCoversPropertyStyleCredentials(t *testing.T) {
+	cases := []struct {
+		name string
+		args []string
+		want string
+	}{
+		{"gradle property", []string{"gradle", "-Psigning.password=s3cret"}, "gradle -Psigning.password=***"},
+		{"gradle camel case", []string{"gradle", "-PsigningPassword=s3cret"}, "gradle -PsigningPassword=***"},
+		{"java system property", []string{"java", "-Dsigning.keyPassword=s3cret"}, "java -Dsigning.keyPassword=***"},
+		{"bare assignment", []string{"make", "PASSWORD=s3cret"}, "make PASSWORD=***"},
+		{"msbuild sub-key", []string{"msbuild", "/p:Password=s3cret"}, "msbuild /p:Password=***"},
+		{"separate value", []string{"jarsigner", "-storepass", "hunter2"}, "jarsigner -storepass ***"},
+		// A secret flag given no value must not consume the following flag's value.
+		{"missing value", []string{"jarsigner", "-storepass", "-keypass", "hunter3"}, "jarsigner -storepass -keypass ***"},
+		{"passwd suffix", []string{"tool", "--db-passwd=s3cret"}, "tool --db-passwd=***"},
+		{"colon value", []string{"tool", "-pass:s3cret"}, "tool -pass:***"},
+		// A sub-key without an inline value must not swallow the next argument.
+		{"sub-key without value", []string{"signtool", "/p:pass", "app.exe"}, "signtool /p:*** app.exe"},
+	}
+	for _, c := range cases {
+		if got := joinCommandArgs(redactCommandArgs(c.args)); got != c.want {
+			t.Errorf("%s:\n  got  %s\n  want %s", c.name, got, c.want)
+		}
+	}
+}
