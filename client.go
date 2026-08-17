@@ -53,6 +53,9 @@ type signResponse struct {
 type apiErrorBody struct {
 	Message string `json:"message"`
 	Error   string `json:"error"`
+	Details struct {
+		HasPendingRequest bool `json:"hasPendingRequest"`
+	} `json:"details"`
 }
 
 func newInfisicalClient(cfg *Config) (*InfisicalClient, error) {
@@ -108,10 +111,11 @@ func newAPIError(operation string, resp *resty.Response) *APIError {
 		}
 	}
 	return &APIError{
-		Operation:  operation,
-		StatusCode: resp.StatusCode(),
-		Message:    message,
-		Code:       body.Error,
+		Operation:         operation,
+		StatusCode:        resp.StatusCode(),
+		Message:           message,
+		Code:              body.Error,
+		HasPendingRequest: body.Details.HasPendingRequest,
 	}
 }
 
@@ -206,11 +210,10 @@ func (c *InfisicalClient) Sign(token, signerID string, req signRequest) (*signRe
 }
 
 type approvalRequest struct {
-	Justification        string       `json:"justification"`
-	RequestedSignings    int          `json:"requestedSignings,omitempty"`
-	RequestedWindowStart string       `json:"requestedWindowStart,omitempty"`
-	RequestedWindowEnd   string       `json:"requestedWindowEnd,omitempty"`
-	Scope                signingScope `json:"scope"`
+	Justification           string       `json:"justification"`
+	RequestedSignings       int          `json:"requestedSignings,omitempty"`
+	RequestedWindowDuration string       `json:"requestedWindowDuration,omitempty"`
+	Scope                   signingScope `json:"scope"`
 }
 
 type approvalRequestResponse struct {

@@ -13,7 +13,7 @@ import (
 	"unicode/utf8"
 )
 
-const maxCommandLen = 2048
+const maxCommandLen = 32767
 
 const redactedValue = "***"
 
@@ -162,7 +162,6 @@ type clientMetadata struct {
 	Hostname               string `json:"hostname,omitempty"`
 	OSUsername             string `json:"osUsername,omitempty"`
 	Command                string `json:"command,omitempty"`
-	ModuleVersion          string `json:"moduleVersion,omitempty"`
 }
 
 type signingScope struct {

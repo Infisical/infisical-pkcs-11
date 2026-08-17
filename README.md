@@ -132,7 +132,7 @@ The module reads a JSON config file and environment variables. Environment varia
 | `cache.token_ttl_seconds` | No | `300` | Auth token cache duration |
 | `cache.cert_ttl_seconds` | No | `3600` | Certificate data cache duration |
 | `cache.signer_ttl_seconds` | No | `300` | Signer list cache duration |
-| `approval.signing_duration` | No | — | Auto-request approval with this time window (`"30m"`, `"8h"`, `"2d"`). The module accepts 1m to 30d as a sanity check; the real limit is the signer's approval policy, which rejects a request asking for longer. The window starts when the request is opened, not when it is approved, so allow for approval time |
+| `approval.signing_duration` | No | — | Auto-request approval with this time window (`"30m"`, `"8h"`, `"2d"`). The module accepts 1m to 30d as a sanity check; the real limit is the signer's approval policy, which rejects a request asking for longer. The window starts when the request is approved, so time spent waiting for an approver does not eat into it |
 | `approval.signing_count` | No | — | Auto-request approval for this many signings |
 | `log_level` | No | `info` | Log verbosity: `trace`, `debug`, `info`, `warn`, `error` |
 | `log_file` | No | stderr | Path to log file |
@@ -379,6 +379,8 @@ gpg --card-status
 
 If a signer has an approval policy, you need an approved sign request before signing. Without it, sign requests will return `CKR_GENERAL_ERROR` (HTTP 403).
 
+While a request is still pending, the requester and its approvers can stop enforcing individual scope parameters on it, which is what turns a request pinned to one artifact into access for a whole series of builds. See [Approvals](https://infisical.com/docs/documentation/platform/pki/code-signing/approvals#removing-a-parameter-from-a-request).
+
 ### Automatic Approval Requests
 
 When `approval.signing_duration` and/or `approval.signing_count` are configured, the module **automatically creates an approval request** when signing is denied because no approved sign request exists. The sign operation still fails (an approver must approve the request first), but the request is created for you — no manual API call needed.
@@ -427,21 +429,13 @@ TOKEN=$(curl -s https://app.infisical.com/api/v1/auth/universal-auth/login \
   -d '{"clientId":"...","clientSecret":"..."}' | jq -r '.accessToken')
 
 # Request access for an 8-hour window, capped at 10 signatures
-# macOS / BSD:
-START=$(date -u -v+1M +"%Y-%m-%dT%H:%M:%SZ")
-END=$(date -u -v+8H +"%Y-%m-%dT%H:%M:%SZ")
-# Linux / GNU coreutils (uncomment if your `date` is GNU):
-# START=$(date -u -d '+1 minute' +"%Y-%m-%dT%H:%M:%SZ")
-# END=$(date -u -d '+8 hours' +"%Y-%m-%dT%H:%M:%SZ")
-
 curl -s https://app.infisical.com/api/v1/cert-manager/signers/your-signer-id/requests \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer $TOKEN" \
   -d "{
     \"justification\": \"CI/CD release build\",
     \"requestedSignings\": 10,
-    \"requestedWindowStart\": \"$START\",
-    \"requestedWindowEnd\": \"$END\"
+    \"requestedWindowDuration\": \"8h\"
   }"
 ```
 
@@ -451,14 +445,13 @@ An approver must approve the request via the Infisical UI (Cert Manager > Code S
 
 ### Request Shape
 
-Each approval request can be bounded by a signature count, a time window, or both. The Signer's policy sets the ceiling for each (`Signatures per approval`, `Signing window`) — a request that exceeds the policy is rejected with a 400. `justification` is the only required field; omitting a bound falls back to the policy ceiling.
+Each approval request can be bounded by a signature count, a time window, or both. The window is a duration and its clock starts when the request is approved, so time spent waiting for an approver does not eat into it. The Signer's policy sets the ceiling for each (`Signatures per approval`, `Signing window`) — a request that exceeds the policy is rejected with a 400. `justification` is the only required field; omitting a bound falls back to the policy ceiling.
 
 | Field | Description |
 |-------|-------------|
 | `justification` | **Required.** Free-text reason for the request (1–2048 chars), shown to approvers. |
 | `requestedSignings` | How many sign operations the approval permits. Leave empty to fall back to the policy ceiling. |
-| `requestedWindowStart` | ISO 8601 timestamp the access window opens. Defaults to "now". |
-| `requestedWindowEnd` | ISO 8601 timestamp the access window closes. Leave empty to fall back to the policy ceiling. |
+| `requestedWindowDuration` | How long the approval stays usable once granted, for example `8h`. The window starts when the request is approved. Leave empty to fall back to the policy ceiling. |
 | `scope` | Optional object scoping the approval (`command`, `signingApplication`, `signingApplicationHash`, `hostname`, `osUsername`, `dataHash`). Every value you declare must match exactly at sign time or the call is denied; parameters you omit are unrestricted. `dataHash` is compared against the digest of the submitted payload, so it holds even if a caller reports something else. |
 | `restrictToRequestIp` | Optional boolean. Scopes the approval to the address the request arrives from, read by Infisical rather than supplied by the caller. An address cannot be declared directly. |
 
@@ -466,7 +459,7 @@ Each approval request can be bounded by a signature count, a time window, or bot
 
 Administrators of a Signer can also pre-approve or revoke requests on behalf of other members:
 
-- `POST /api/v1/cert-manager/signers/{signerId}/requests/pre-approve` — body accepts `granteeUserId` **or** `granteeIdentityId` plus the same `justification` / `requestedSignings` / `requestedWindowStart` / `requestedWindowEnd` fields. Creates a request that is already approved.
+- `POST /api/v1/cert-manager/signers/{signerId}/requests/pre-approve` — body accepts `granteeUserId` **or** `granteeIdentityId` plus the same `justification` / `requestedSignings` / `requestedWindowDuration` fields. Creates a request that is already approved.
 - `POST /api/v1/cert-manager/signers/{signerId}/requests/{requestId}/revoke` — revokes a pending or active request. No body.
 
 ## Troubleshooting

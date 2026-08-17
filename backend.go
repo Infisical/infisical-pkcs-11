@@ -1045,7 +1045,7 @@ func (b *InfisicalBackend) signInternal(sess *session, data []byte) ([]byte, err
 		Data:             base64.StdEncoding.EncodeToString(signData),
 		SigningAlgorithm: algorithm,
 		IsDigest:         isDigest,
-		ClientMetadata:   signMetadata(),
+		ClientMetadata:   currentSigningContext().clientMetadata(),
 	}
 
 	var resp *signResponse
@@ -1055,8 +1055,9 @@ func (b *InfisicalBackend) signInternal(sess *session, data []byte) ([]byte, err
 		return callErr
 	})
 	if err != nil {
-		b.autoRequestOnDenial(signer, signData, err)
-		b.log.Error().Err(err).Str("signer", signer.Name).Str("algorithm", algorithm).Msg("Sign failed")
+		if !b.reportApprovalDenial(signer, signData, err) {
+			b.log.Error().Err(err).Str("signer", signer.Name).Str("algorithm", algorithm).Msg("Sign failed")
+		}
 		return nil, err
 	}
 
@@ -1069,34 +1070,49 @@ func (b *InfisicalBackend) signInternal(sess *session, data []byte) ([]byte, err
 	return sig, nil
 }
 
-func (b *InfisicalBackend) autoRequestOnDenial(signer *signerResponse, signData []byte, signErr error) {
+func (b *InfisicalBackend) reportApprovalDenial(signer *signerResponse, signData []byte, signErr error) bool {
 	var apiErr *APIError
 	if !errors.As(signErr, &apiErr) {
-		return
+		return false
 	}
-	if apiErr.IsApprovalRequired() {
-		payloadDigest := sha256.Sum256(signData)
-		b.requestApprovalIfConfigured(signer, hex.EncodeToString(payloadDigest[:]))
-		return
+	if !apiErr.IsApprovalRequired() {
+		if apiErr.StatusCode == http.StatusForbidden {
+			b.log.Debug().
+				Str("signer", signer.Name).
+				Str("error_code", apiErr.Code).
+				Msg("Sign denied for a reason an approval cannot resolve; not auto-requesting")
+		}
+		return false
 	}
-	if apiErr.StatusCode == http.StatusForbidden {
-		b.log.Debug().
-			Str("signer", signer.Name).
-			Str("error_code", apiErr.Code).
-			Msg("Sign denied for a reason an approval cannot resolve; not auto-requesting")
-	}
-}
 
-func (b *InfisicalBackend) requestApprovalIfConfigured(signer *signerResponse, dataHash string) {
+	denied := b.log.Error().Str("signer", signer.Name)
+
+	if apiErr.HasPendingRequest {
+		denied.Msg("Sign denied: your approval request is awaiting review under Cert Manager > Code Signing > Signers > Approvals. Run the same command again once it is approved")
+		return true
+	}
+
 	cfg := b.config.Approval
 	if cfg.SigningCount == 0 && cfg.SigningDuration == "" {
-		return
+		denied.Msg("Sign denied: this signer needs approved access. Ask an approver under Cert Manager > Code Signing > Signers > Approvals, or set approval.signing_count and approval.signing_duration in the module config so requests are opened for you (https://infisical.com/docs/documentation/platform/pki/code-signing/approvals)")
+		return true
 	}
-	if signer.ApprovalPolicyID == nil || *signer.ApprovalPolicyID == "" {
-		b.log.Warn().Str("signer", signer.Name).Msg("Signing requires approval but signer has no approval policy ID; cannot auto-request")
-		return
+	payloadDigest := sha256.Sum256(signData)
+	request, err := b.requestApproval(signer, hex.EncodeToString(payloadDigest[:]))
+	if err != nil {
+		denied.Err(err).Msg("Sign denied: opening an approval request also failed. Ask an approver under Cert Manager > Code Signing > Signers > Approvals")
+		return true
 	}
 
+	denied.
+		Str("request_id", request.ID).
+		Str("status", request.Status).
+		Msg("Sign denied: an approval request was opened for this signing situation. Ask an approver to review it under Cert Manager > Code Signing > Signers > Approvals, then run the same command again")
+	return true
+}
+
+func (b *InfisicalBackend) requestApproval(signer *signerResponse, dataHash string) (*approvalRequestResponse, error) {
+	cfg := b.config.Approval
 	signCtx := currentSigningContext()
 	req := approvalRequest{
 		Justification: approvalJustification(signCtx.Hostname),
@@ -1104,12 +1120,7 @@ func (b *InfisicalBackend) requestApprovalIfConfigured(signer *signerResponse, d
 	}
 
 	if cfg.SigningDuration != "" {
-		d, err := parseDuration(cfg.SigningDuration)
-		if err == nil {
-			now := time.Now().UTC()
-			req.RequestedWindowStart = now.Format(time.RFC3339)
-			req.RequestedWindowEnd = now.Add(d).Format(time.RFC3339)
-		}
+		req.RequestedWindowDuration = cfg.SigningDuration
 	}
 	if cfg.SigningCount > 0 {
 		req.RequestedSignings = cfg.SigningCount
@@ -1117,27 +1128,10 @@ func (b *InfisicalBackend) requestApprovalIfConfigured(signer *signerResponse, d
 
 	token, err := b.getToken()
 	if err != nil {
-		b.log.Warn().Msg("Cannot auto-request approval: no access token")
-		return
+		return nil, err
 	}
 
-	result, err := b.client.RequestApproval(token, signer.ID, req)
-	if err != nil {
-		b.log.Warn().Err(err).Str("signer", signer.Name).Msg("Failed to auto-request signing approval")
-		return
-	}
-
-	b.log.Info().
-		Str("signer", signer.Name).
-		Str("request_id", result.ID).
-		Str("status", result.Status).
-		Msg("Auto-requested signing approval (requires approver action)")
-}
-
-func signMetadata() clientMetadata {
-	md := currentSigningContext().clientMetadata()
-	md.ModuleVersion = version
-	return md
+	return b.client.RequestApproval(token, signer.ID, req)
 }
 
 func approvalJustification(hostname string) string {

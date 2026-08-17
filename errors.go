@@ -22,10 +22,11 @@ var (
 
 // APIError represents an error response from the Infisical API.
 type APIError struct {
-	StatusCode int
-	Message    string
-	Operation  string
-	Code       string
+	StatusCode        int
+	Message           string
+	Operation         string
+	Code              string
+	HasPendingRequest bool
 }
 
 const ErrorCodeApprovalRequired = "ApprovalRequired"
