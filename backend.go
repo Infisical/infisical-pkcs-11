@@ -58,6 +58,7 @@ func (b *InfisicalBackend) Initialize() error {
 
 	cfg, err := loadConfig()
 	if err != nil {
+		fmt.Fprintf(os.Stderr, "infisical-pkcs11: %v\n", err)
 		return err
 	}
 	b.config = cfg
@@ -1094,7 +1095,7 @@ func (b *InfisicalBackend) reportApprovalDenial(signer *signerResponse, signData
 
 	cfg := b.config.Approval
 	if cfg.SigningCount == 0 && cfg.SigningDuration == "" {
-		denied.Msg("Sign denied: this signer needs approved access. Ask an approver under Cert Manager > Code Signing > Signers > Approvals, or set approval.signing_count and approval.signing_duration in the module config so requests are opened for you (https://infisical.com/docs/documentation/platform/pki/code-signing/approvals)")
+		denied.Msgf("%s Ask an approver under Cert Manager > Code Signing > Signers > Approvals, or set approval.signing_count and approval.signing_duration in the module config so requests are opened for you (https://infisical.com/docs/documentation/platform/pki/code-signing/approvals)", apiErr.Message)
 		return true
 	}
 	payloadDigest := sha256.Sum256(signData)
@@ -1116,7 +1117,7 @@ func (b *InfisicalBackend) requestApproval(signer *signerResponse, dataHash stri
 	signCtx := currentSigningContext()
 	req := approvalRequest{
 		Justification: approvalJustification(signCtx.Hostname),
-		Scope:         signCtx.requestScope(dataHash),
+		Scope:         signCtx.requestScope(dataHash, cfg.ExcludeScopeFields, cfg.IPAddress),
 	}
 
 	if cfg.SigningDuration != "" {

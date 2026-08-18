@@ -218,7 +218,7 @@ func TestClientMetadataKeysMatchScopeKeys(t *testing.T) {
 	}
 
 	md := wireKeys(t, ctx.clientMetadata())
-	scope := wireKeys(t, ctx.requestScope("digest"))
+	scope := wireKeys(t, ctx.requestScope("digest", nil, ""))
 
 	// 'tool' is the only key that differs by name, mapped in buildObservedSigningContext
 	// (backend/src/services/approval-policy/code-signing/code-signing-policy-fns.ts). Every other key
@@ -242,7 +242,7 @@ func TestScopeWireNames(t *testing.T) {
 		ApplicationHash: "abc",
 		Hostname:        "build-01",
 		OSUsername:      "svc",
-	}.requestScope("digest")
+	}.requestScope("digest", nil, "")
 
 	got := wireKeys(t, full)
 	want := []string{"command", "signingApplication", "signingApplicationHash", "hostname", "osUsername", "dataHash"}
@@ -258,7 +258,7 @@ func TestScopeWireNames(t *testing.T) {
 }
 
 func TestRequestScopeOmitsEmptyFieldsAndNeverDeclaresIP(t *testing.T) {
-	scope := wireKeys(t, signingContext{Hostname: "build-01"}.requestScope("digest"))
+	scope := wireKeys(t, signingContext{Hostname: "build-01"}.requestScope("digest", nil, ""))
 
 	if _, ok := scope["command"]; ok {
 		t.Fatal("an empty field must be omitted rather than sent blank")
@@ -274,8 +274,82 @@ func TestRequestScopeOmitsEmptyFieldsAndNeverDeclaresIP(t *testing.T) {
 // The digest is what makes the scope meaningful, so an all-empty context must not produce a
 // request that would grant broadly scoped signing.
 func TestRequestScopeAlwaysCarriesTheDigest(t *testing.T) {
-	scope := wireKeys(t, signingContext{}.requestScope("digest"))
+	scope := wireKeys(t, signingContext{}.requestScope("digest", nil, ""))
 	if scope["dataHash"] != "digest" {
 		t.Fatalf("expected the digest to be declared even with no other context, got %v", scope)
 	}
+}
+
+func TestRequestScopeOmitsExcludedFields(t *testing.T) {
+	ctx := signingContext{
+		Command:         "signtool sign app.exe",
+		Application:     "signtool",
+		ApplicationHash: "abc",
+		Hostname:        "build-01",
+		OSUsername:      "svc",
+	}
+
+	scope := ctx.requestScope("digest", []string{scopeFieldDataHash}, "")
+	if scope.DataHash != "" {
+		t.Fatalf("expected data_hash to be excluded, got %q", scope.DataHash)
+	}
+	if scope.Command != ctx.Command || scope.Hostname != ctx.Hostname || scope.OSUsername != ctx.OSUsername {
+		t.Fatalf("excluding one parameter must not drop the others: %+v", scope)
+	}
+	if _, present := wireBody(t, scope)["dataHash"]; present {
+		t.Fatal("an excluded parameter must not appear in the request body")
+	}
+
+	if kept := ctx.requestScope("digest", nil, ""); kept.DataHash != "digest" {
+		t.Fatalf("no exclusions must keep every parameter, got %+v", kept)
+	}
+}
+
+func TestRequestScopeAddressIsAbsentPinnedOrSkipped(t *testing.T) {
+	ctx := signingContext{Command: "signtool sign app.exe", Hostname: "build-01"}
+
+	if _, present := wireBody(t, ctx.requestScope("digest", nil, ""))["ipAddress"]; present {
+		t.Fatal("an address this module did not pin must be left for Infisical to fill in")
+	}
+
+	pinned := wireBody(t, ctx.requestScope("digest", nil, "203.0.113.10"))["ipAddress"]
+	if pinned != "203.0.113.10" {
+		t.Fatalf("a pinned address must reach the server verbatim, got %v", pinned)
+	}
+
+	skipped, present := wireBody(t, ctx.requestScope("digest", []string{scopeFieldIPAddress}, ""))["ipAddress"]
+	if !present || skipped != nil {
+		t.Fatalf("excluding ip_address must send an explicit null, got %v (present=%v)", skipped, present)
+	}
+
+	both, present := wireBody(t, ctx.requestScope("digest", []string{scopeFieldIPAddress}, "203.0.113.10"))["ipAddress"]
+	if !present || both != nil {
+		t.Fatalf("excluding must override a pinned address, got %v (present=%v)", both, present)
+	}
+}
+
+func TestValidateScopeExclusions(t *testing.T) {
+	if err := ValidateScopeExclusions([]string{scopeFieldDataHash, scopeFieldIPAddress}); err != nil {
+		t.Fatalf("known field names must validate: %v", err)
+	}
+	if err := ValidateScopeExclusions(nil); err != nil {
+		t.Fatalf("no exclusions must validate: %v", err)
+	}
+	if err := ValidateScopeExclusions([]string{"dataHash"}); err == nil {
+		t.Fatal("expected the camelCase spelling to be rejected")
+	}
+}
+
+func wireBody(t *testing.T, payload any) map[string]any {
+	t.Helper()
+
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatalf("marshalling the payload failed: %v", err)
+	}
+	var out map[string]any
+	if err := json.Unmarshal(raw, &out); err != nil {
+		t.Fatalf("the payload did not marshal to an object: %v (%s)", err, raw)
+	}
+	return out
 }

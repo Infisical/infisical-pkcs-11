@@ -3,6 +3,8 @@ package main
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
+	"fmt"
 	"io"
 	"os"
 	"os/user"
@@ -12,6 +14,35 @@ import (
 	"sync"
 	"unicode/utf8"
 )
+
+const (
+	scopeFieldCommand                = "command"
+	scopeFieldSigningApplication     = "signing_application"
+	scopeFieldSigningApplicationHash = "signing_application_hash"
+	scopeFieldHostname               = "hostname"
+	scopeFieldOSUsername             = "os_username"
+	scopeFieldIPAddress              = "ip_address"
+	scopeFieldDataHash               = "data_hash"
+)
+
+var ScopeFieldNames = []string{
+	scopeFieldCommand,
+	scopeFieldSigningApplication,
+	scopeFieldSigningApplicationHash,
+	scopeFieldHostname,
+	scopeFieldOSUsername,
+	scopeFieldIPAddress,
+	scopeFieldDataHash,
+}
+
+func ValidateScopeExclusions(excluded []string) error {
+	for _, name := range excluded {
+		if !slices.Contains(ScopeFieldNames, name) {
+			return fmt.Errorf("unknown scope field %q (expected one of %s)", name, strings.Join(ScopeFieldNames, ", "))
+		}
+	}
+	return nil
+}
 
 const maxCommandLen = 32767
 
@@ -165,12 +196,13 @@ type clientMetadata struct {
 }
 
 type signingScope struct {
-	Command                string `json:"command,omitempty"`
-	SigningApplication     string `json:"signingApplication,omitempty"`
-	SigningApplicationHash string `json:"signingApplicationHash,omitempty"`
-	Hostname               string `json:"hostname,omitempty"`
-	OSUsername             string `json:"osUsername,omitempty"`
-	DataHash               string `json:"dataHash,omitempty"`
+	Command                string          `json:"command,omitempty"`
+	SigningApplication     string          `json:"signingApplication,omitempty"`
+	SigningApplicationHash string          `json:"signingApplicationHash,omitempty"`
+	Hostname               string          `json:"hostname,omitempty"`
+	OSUsername             string          `json:"osUsername,omitempty"`
+	IPAddress              json.RawMessage `json:"ipAddress,omitempty"`
+	DataHash               string          `json:"dataHash,omitempty"`
 }
 
 func (c signingContext) clientMetadata() clientMetadata {
@@ -183,8 +215,10 @@ func (c signingContext) clientMetadata() clientMetadata {
 	}
 }
 
-func (c signingContext) requestScope(dataHash string) signingScope {
-	return signingScope{
+var scopeSkipped = json.RawMessage("null")
+
+func (c signingContext) requestScope(dataHash string, excluded []string, pinnedIPAddress string) signingScope {
+	scope := signingScope{
 		Command:                c.Command,
 		SigningApplication:     c.Application,
 		SigningApplicationHash: c.ApplicationHash,
@@ -192,6 +226,33 @@ func (c signingContext) requestScope(dataHash string) signingScope {
 		OSUsername:             c.OSUsername,
 		DataHash:               dataHash,
 	}
+	if pinnedIPAddress != "" {
+		pinned, err := json.Marshal(pinnedIPAddress)
+		if err == nil {
+			scope.IPAddress = pinned
+		}
+	}
+
+	for _, name := range excluded {
+		switch name {
+		case scopeFieldCommand:
+			scope.Command = ""
+		case scopeFieldSigningApplication:
+			scope.SigningApplication = ""
+		case scopeFieldSigningApplicationHash:
+			scope.SigningApplicationHash = ""
+		case scopeFieldHostname:
+			scope.Hostname = ""
+		case scopeFieldOSUsername:
+			scope.OSUsername = ""
+		case scopeFieldIPAddress:
+			scope.IPAddress = scopeSkipped
+		case scopeFieldDataHash:
+			scope.DataHash = ""
+		}
+	}
+
+	return scope
 }
 
 func fileSHA256(path string) string {

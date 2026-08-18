@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/url"
 	"os"
 	"runtime"
@@ -43,8 +44,10 @@ type AuthConfig struct {
 }
 
 type ApprovalConfig struct {
-	SigningCount    int    `json:"signing_count"`
-	SigningDuration string `json:"signing_duration"`
+	SigningCount       int      `json:"signing_count"`
+	SigningDuration    string   `json:"signing_duration"`
+	ExcludeScopeFields []string `json:"exclude_scope_fields"`
+	IPAddress          string   `json:"ip_address"`
 }
 
 type Config struct {
@@ -139,6 +142,12 @@ func (c *Config) validate() error {
 	}
 	if c.Approval.SigningCount < 0 {
 		return fmt.Errorf("approval.signing_count must be a positive integer")
+	}
+	if err := ValidateScopeExclusions(c.Approval.ExcludeScopeFields); err != nil {
+		return fmt.Errorf("invalid approval.exclude_scope_fields: %w", err)
+	}
+	if c.Approval.IPAddress != "" && net.ParseIP(c.Approval.IPAddress) == nil {
+		return fmt.Errorf("approval.ip_address must be an IP address, got %q", c.Approval.IPAddress)
 	}
 	return nil
 }

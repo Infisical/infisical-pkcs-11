@@ -134,6 +134,8 @@ The module reads a JSON config file and environment variables. Environment varia
 | `cache.signer_ttl_seconds` | No | `300` | Signer list cache duration |
 | `approval.signing_duration` | No | — | Auto-request approval with this time window (`"30m"`, `"8h"`, `"2d"`). The module accepts 1m to 30d as a sanity check; the real limit is the signer's approval policy, which rejects a request asking for longer. The window starts when the request is approved, so time spent waiting for an approver does not eat into it |
 | `approval.signing_count` | No | — | Auto-request approval for this many signings |
+| `approval.exclude_scope_fields` | No | — | Signing parameters to leave out of the requests the module opens, so one approval covers any value of them: `command`, `signing_application`, `signing_application_hash`, `hostname`, `os_username`, `ip_address`, `data_hash`. An unknown name is rejected at load |
+| `approval.ip_address` | No | — | Pin the requests the module opens to this address instead of the one Infisical sees them arrive from, which is what it uses when this is unset. It need not be this host's, so you can name a build agent's egress address. Infisical enforces the address it sees either way, so this only ever narrows access |
 | `log_level` | No | `info` | Log verbosity: `trace`, `debug`, `info`, `warn`, `error` |
 | `log_file` | No | stderr | Path to log file |
 
@@ -379,7 +381,7 @@ gpg --card-status
 
 If a signer has an approval policy, you need an approved sign request before signing. Without it, sign requests will return `CKR_GENERAL_ERROR` (HTTP 403).
 
-While a request is still pending, the requester and its approvers can stop enforcing individual scope parameters on it, which is what turns a request pinned to one artifact into access for a whole series of builds. See [Approvals](https://infisical.com/docs/documentation/platform/pki/code-signing/approvals#removing-a-parameter-from-a-request).
+A request's scope is fixed once it is open. Nobody edits it during review, including the approvers, so a request whose parameters are wrong is rejected and reopened with the ones you want. To have a request cover a series of builds rather than one artifact, leave the parameters that vary out of it in the first place with `approval.exclude_scope_fields`. See [Approvals](https://infisical.com/docs/documentation/platform/pki/code-signing/approvals).
 
 ### Automatic Approval Requests
 
@@ -406,11 +408,11 @@ The auto-created request is [scoped](https://infisical.com/docs/documentation/pl
 | OS username | The account running the signing tool |
 | Data digest | SHA-256 of the payload the denied call submitted. Tools submit a digest of the file, so this is not `sha256sum yourfile` |
 
-The module does not declare an IP address. To limit an approval to one, set it on the request in Infisical.
+The module does not observe an IP address, because the address that matters is the one Infisical receives the sign call from, after any NAT or proxy in between. Infisical fills that address in for you, so requests are scoped by address by default. Set `approval.ip_address` to pin a different one, which is how you tie an approval to a build agent's egress address, or add `ip_address` to `approval.exclude_scope_fields` to leave signing unrestricted by address. Infisical always compares against the address it sees, so neither setting can widen access.
 
 Two things to know before relying on this:
 
-- **The request is pinned to one payload**, so each artifact needs its own approval and `signing_count` above 1 only allows re-signing the same artifact. Widen the scope in Infisical when one approval should cover a batch.
+- **The request is pinned to one payload**, so each artifact needs its own approval and `signing_count` above 1 only allows re-signing the same artifact. Add `data_hash` to `approval.exclude_scope_fields` when one approval should cover a batch. A timestamped signature is the common case: the digest changes between runs even for the same file, so pinning it means a fresh approval for every build.
 - **The command is compared exactly**, apart from whitespace. Reordering the flags, a different path to the tool, a changed or added argument, writing `--flag value` as `--flag=value`, a per-build temporary path, or a tool upgrade (its checksum changes) all produce a new request.
 
 Retrying a denied command does not pile up duplicate requests. The server treats a pending request from the same requester as the same ask when its scope, its signature count and the length of its signing window all match, so a retry resumes that request instead of opening another and notifying approvers again.
@@ -453,7 +455,7 @@ Each approval request can be bounded by a signature count, a time window, or bot
 | `requestedSignings` | How many sign operations the approval permits. Leave empty to fall back to the policy ceiling. |
 | `requestedWindowDuration` | How long the approval stays usable once granted, for example `8h`. The window starts when the request is approved. Leave empty to fall back to the policy ceiling. |
 | `scope` | Optional object scoping the approval (`command`, `signingApplication`, `signingApplicationHash`, `hostname`, `osUsername`, `dataHash`). Every value you declare must match exactly at sign time or the call is denied; parameters you omit are unrestricted. `dataHash` is compared against the digest of the submitted payload, so it holds even if a caller reports something else. |
-| `restrictToRequestIp` | Optional boolean. Scopes the approval to the address the request arrives from, read by Infisical rather than supplied by the caller. An address cannot be declared directly. |
+| `ipAddress` | Optional. The address sign calls have to arrive from. Infisical compares it against the address it receives the call from, never one the caller reports, so declaring an address only narrows access. |
 
 #### Admin endpoints
 
@@ -479,7 +481,7 @@ Then monitor: `tail -f /tmp/infisical-pkcs11.log`
 
 | Error | Cause | Fix |
 |-------|-------|-----|
-| `CKR_GENERAL_ERROR` on init | Config file not found or invalid | Check `INFISICAL_CONFIG` path and JSON syntax |
+| `CKR_GENERAL_ERROR` on init | Config file not found or invalid | The module prints the reason to stderr prefixed `infisical-pkcs11:`, naming the setting at fault, since PKCS#11 has no way to return more than the generic code. Check that line, then `INFISICAL_CONFIG` and the file's JSON syntax |
 | `CKR_GENERAL_ERROR` on sign | Approval required or permission denied | Request approval, or confirm the Machine Identity is a Signer member with the Administrator or Operator role (Auditors cannot sign) |
 | `CKR_USER_NOT_LOGGED_IN` | No credentials or token expired | Set `INFISICAL_UNIVERSAL_AUTH_CLIENT_ID` and `CLIENT_SECRET` |
 | `CKR_PIN_INCORRECT` | Invalid credentials in PIN | For universal-auth use the format `clientId:clientSecret`; for token auth pass the access token as the PIN |
