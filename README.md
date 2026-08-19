@@ -406,7 +406,7 @@ The auto-created request is [scoped](https://infisical.com/docs/documentation/pl
 | Signing application | The host process executable name, plus its SHA-256 checksum |
 | Hostname | The machine the module runs on |
 | OS username | The account running the signing tool |
-| Data digest | SHA-256 of the payload the denied call submitted. Tools submit a digest of the file, so this is not `sha256sum yourfile` |
+| Data hash | SHA-256 of the payload the denied call submitted. Tools submit a digest of the file, so this is not `sha256sum yourfile` |
 
 The module does not observe an IP address, because the address that matters is the one Infisical receives the sign call from, after any NAT or proxy in between. Infisical fills that address in for you, so requests are scoped by address by default. Set `approval.ip_address` to pin a different one, which is how you tie an approval to a build agent's egress address, or add `ip_address` to `approval.exclude_scope_fields` to leave signing unrestricted by address. Infisical always compares against the address it sees, so neither setting can widen access.
 
