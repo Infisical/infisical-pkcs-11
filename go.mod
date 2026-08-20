@@ -4,8 +4,10 @@ go 1.24.5
 
 require (
 	github.com/go-resty/resty/v2 v2.16.5
+	github.com/infisical/go-sdk v0.6.8
 	github.com/miekg/pkcs11 v1.1.2
 	github.com/rs/zerolog v1.34.0
+	golang.org/x/sys v0.28.0
 )
 
 require (
@@ -36,7 +38,6 @@ require (
 	github.com/googleapis/enterprise-certificate-proxy v0.3.2 // indirect
 	github.com/googleapis/gax-go/v2 v2.12.5 // indirect
 	github.com/hashicorp/golang-lru/v2 v2.0.7 // indirect
-	github.com/infisical/go-sdk v0.6.8 // indirect
 	github.com/mattn/go-colorable v0.1.13 // indirect
 	github.com/mattn/go-isatty v0.0.19 // indirect
 	github.com/oracle/oci-go-sdk/v65 v65.95.2 // indirect
@@ -52,7 +53,6 @@ require (
 	golang.org/x/net v0.33.0 // indirect
 	golang.org/x/oauth2 v0.21.0 // indirect
 	golang.org/x/sync v0.10.0 // indirect
-	golang.org/x/sys v0.28.0 // indirect
 	golang.org/x/text v0.21.0 // indirect
 	golang.org/x/time v0.6.0 // indirect
 	google.golang.org/api v0.188.0 // indirect

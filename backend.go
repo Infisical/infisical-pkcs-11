@@ -10,11 +10,13 @@ import (
 	"crypto/x509"
 	"encoding/asn1"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/pem"
 	"errors"
 	"fmt"
 	"io"
 	"math/big"
+	"net/http"
 	"os"
 	"strings"
 	"sync"
@@ -56,6 +58,7 @@ func (b *InfisicalBackend) Initialize() error {
 
 	cfg, err := loadConfig()
 	if err != nil {
+		fmt.Fprintf(os.Stderr, "infisical-pkcs11: %v\n", err)
 		return err
 	}
 	b.config = cfg
@@ -82,6 +85,8 @@ func (b *InfisicalBackend) Initialize() error {
 	} else if cfg.Auth.Method == authMethodToken && cfg.Auth.Token != "" {
 		b.log.Info().Msg("Initialized with token auth")
 	}
+
+	currentSigningContext()
 
 	b.log.Info().Str("version", version).Msg("PKCS#11 module initialized")
 	return nil
@@ -1037,16 +1042,11 @@ func (b *InfisicalBackend) signInternal(sess *session, data []byte) ([]byte, err
 		signData = hashDataForMechanism(sess.signMech, data)
 	}
 
-	hostname, _ := os.Hostname()
-
 	req := signRequest{
 		Data:             base64.StdEncoding.EncodeToString(signData),
 		SigningAlgorithm: algorithm,
 		IsDigest:         isDigest,
-		ClientMetadata: map[string]interface{}{
-			"tool":     fmt.Sprintf("pkcs11-module/%s", version),
-			"hostname": hostname,
-		},
+		ClientMetadata:   currentSigningContext().clientMetadata(),
 	}
 
 	var resp *signResponse
@@ -1056,11 +1056,9 @@ func (b *InfisicalBackend) signInternal(sess *session, data []byte) ([]byte, err
 		return callErr
 	})
 	if err != nil {
-		var apiErr *APIError
-		if errors.As(err, &apiErr) && apiErr.StatusCode == 403 {
-			b.requestApprovalIfConfigured(signer)
+		if !b.reportApprovalDenial(signer, signData, err) {
+			b.log.Error().Err(err).Str("signer", signer.Name).Str("algorithm", algorithm).Msg("Sign failed")
 		}
-		b.log.Error().Err(err).Str("signer", signer.Name).Str("algorithm", algorithm).Msg("Sign failed")
 		return nil, err
 	}
 
@@ -1073,27 +1071,57 @@ func (b *InfisicalBackend) signInternal(sess *session, data []byte) ([]byte, err
 	return sig, nil
 }
 
-func (b *InfisicalBackend) requestApprovalIfConfigured(signer *signerResponse) {
-	cfg := b.config.Approval
-	if cfg.SigningCount == 0 && cfg.SigningDuration == "" {
-		return
+func (b *InfisicalBackend) reportApprovalDenial(signer *signerResponse, signData []byte, signErr error) bool {
+	var apiErr *APIError
+	if !errors.As(signErr, &apiErr) {
+		return false
 	}
-	if signer.ApprovalPolicyID == nil || *signer.ApprovalPolicyID == "" {
-		b.log.Warn().Str("signer", signer.Name).Msg("Signing requires approval but signer has no approval policy ID; cannot auto-request")
-		return
+	if !apiErr.IsApprovalRequired() {
+		if apiErr.StatusCode == http.StatusForbidden {
+			b.log.Debug().
+				Str("signer", signer.Name).
+				Str("error_code", apiErr.Code).
+				Msg("Sign denied for a reason an approval cannot resolve; not auto-requesting")
+		}
+		return false
 	}
 
+	denied := b.log.Error().Str("signer", signer.Name)
+
+	if apiErr.HasPendingRequest {
+		denied.Msg("Sign denied: your approval request is awaiting review under Cert Manager > Code Signing > Signers > Approvals. Run the same command again once it is approved")
+		return true
+	}
+
+	cfg := b.config.Approval
+	if cfg.SigningCount == 0 && cfg.SigningDuration == "" {
+		denied.Msgf("%s Ask an approver under Cert Manager > Code Signing > Signers > Approvals, or set approval.signing_count and approval.signing_duration in the module config so requests are opened for you (https://infisical.com/docs/documentation/platform/pki/code-signing/approvals)", apiErr.Message)
+		return true
+	}
+	payloadDigest := sha256.Sum256(signData)
+	request, err := b.requestApproval(signer, hex.EncodeToString(payloadDigest[:]))
+	if err != nil {
+		denied.Err(err).Msg("Sign denied: opening an approval request also failed. Ask an approver under Cert Manager > Code Signing > Signers > Approvals")
+		return true
+	}
+
+	denied.
+		Str("request_id", request.ID).
+		Str("status", request.Status).
+		Msg("Sign denied: an approval request was opened for this signing situation. Ask an approver to review it under Cert Manager > Code Signing > Signers > Approvals, then run the same command again")
+	return true
+}
+
+func (b *InfisicalBackend) requestApproval(signer *signerResponse, dataHash string) (*approvalRequestResponse, error) {
+	cfg := b.config.Approval
+	signCtx := currentSigningContext()
 	req := approvalRequest{
-		Justification: "Auto-requested by PKCS#11 module",
+		Justification: approvalJustification(signCtx.Hostname),
+		Scope:         signCtx.requestScope(dataHash, cfg.ExcludeScopeFields, cfg.IPAddress),
 	}
 
 	if cfg.SigningDuration != "" {
-		d, err := parseDuration(cfg.SigningDuration)
-		if err == nil {
-			now := time.Now().UTC()
-			req.RequestedWindowStart = now.Format(time.RFC3339)
-			req.RequestedWindowEnd = now.Add(d).Format(time.RFC3339)
-		}
+		req.RequestedWindowDuration = cfg.SigningDuration
 	}
 	if cfg.SigningCount > 0 {
 		req.RequestedSignings = cfg.SigningCount
@@ -1101,21 +1129,17 @@ func (b *InfisicalBackend) requestApprovalIfConfigured(signer *signerResponse) {
 
 	token, err := b.getToken()
 	if err != nil {
-		b.log.Warn().Msg("Cannot auto-request approval: no access token")
-		return
+		return nil, err
 	}
 
-	result, err := b.client.RequestApproval(token, signer.ID, req)
-	if err != nil {
-		b.log.Warn().Err(err).Str("signer", signer.Name).Msg("Failed to auto-request signing approval")
-		return
-	}
+	return b.client.RequestApproval(token, signer.ID, req)
+}
 
-	b.log.Info().
-		Str("signer", signer.Name).
-		Str("request_id", result.ID).
-		Str("status", result.Status).
-		Msg("Auto-requested signing approval (requires approver action)")
+func approvalJustification(hostname string) string {
+	if hostname == "" {
+		return "Auto-requested by the Infisical PKCS#11 module"
+	}
+	return fmt.Sprintf("Auto-requested by the Infisical PKCS#11 module on %s", hostname)
 }
 
 func (b *InfisicalBackend) EstimateSignatureSize(sh pkcs11.SessionHandle) int {

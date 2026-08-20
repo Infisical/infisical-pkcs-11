@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 )
 
@@ -218,6 +219,21 @@ func TestLoadConfigValidation(t *testing.T) {
 			config:  `{"server_url": "https://app.infisical.com"}`,
 			wantErr: false,
 		},
+		{
+			name:    "rejects an unknown scope exclusion",
+			config:  `{"server_url": "https://app.infisical.com", "approval": {"exclude_scope_fields": ["dataHash"]}}`,
+			wantErr: true,
+		},
+		{
+			name:    "rejects an ip_address that is not an address",
+			config:  `{"server_url": "https://app.infisical.com", "approval": {"ip_address": "build-agent-02"}}`,
+			wantErr: true,
+		},
+		{
+			name:    "accepts an exclusion and a pinned address",
+			config:  `{"server_url": "https://app.infisical.com", "approval": {"exclude_scope_fields": ["data_hash"], "ip_address": "203.0.113.10"}}`,
+			wantErr: false,
+		},
 	}
 
 	for _, tt := range tests {
@@ -235,5 +251,31 @@ func TestLoadConfigValidation(t *testing.T) {
 				t.Errorf("unexpected error: %v", err)
 			}
 		})
+	}
+}
+
+func TestDefaultConfigPathFor(t *testing.T) {
+	cases := []struct {
+		name        string
+		goos        string
+		programData string
+		want        string
+	}{
+		{"linux", "linux", "", unixDefaultConfigPath},
+		{"darwin", "darwin", `C:\ProgramData`, unixDefaultConfigPath},
+		{"windows", "windows", `D:\Data`, `D:\Data\Infisical\pkcs11.conf`},
+		{"windows without ProgramData set", "windows", "", `C:\ProgramData\Infisical\pkcs11.conf`},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := defaultConfigPathFor(c.goos, c.programData); got != c.want {
+				t.Fatalf("defaultConfigPathFor(%q, %q) = %q, want %q", c.goos, c.programData, got, c.want)
+			}
+		})
+	}
+
+	if got := defaultConfigPath(); got != defaultConfigPathFor(runtime.GOOS, os.Getenv("ProgramData")) {
+		t.Fatalf("defaultConfigPath() disagrees with defaultConfigPathFor: %q", got)
 	}
 }

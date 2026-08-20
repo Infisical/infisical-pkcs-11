@@ -40,10 +40,10 @@ type listSignersResponse struct {
 }
 
 type signRequest struct {
-	Data             string                 `json:"data"`
-	SigningAlgorithm string                 `json:"signingAlgorithm"`
-	IsDigest         bool                   `json:"isDigest"`
-	ClientMetadata   map[string]interface{} `json:"clientMetadata,omitempty"`
+	Data             string         `json:"data"`
+	SigningAlgorithm string         `json:"signingAlgorithm"`
+	IsDigest         bool           `json:"isDigest"`
+	ClientMetadata   clientMetadata `json:"clientMetadata"`
 }
 
 type signResponse struct {
@@ -53,6 +53,9 @@ type signResponse struct {
 type apiErrorBody struct {
 	Message string `json:"message"`
 	Error   string `json:"error"`
+	Details struct {
+		HasPendingRequest bool `json:"hasPendingRequest"`
+	} `json:"details"`
 }
 
 func newInfisicalClient(cfg *Config) (*InfisicalClient, error) {
@@ -97,17 +100,23 @@ func newInfisicalClient(cfg *Config) (*InfisicalClient, error) {
 	}, nil
 }
 
-func parseErrorResponse(resp *resty.Response) string {
+func newAPIError(operation string, resp *resty.Response) *APIError {
+	message := fmt.Sprintf("HTTP %d", resp.StatusCode())
 	var body apiErrorBody
-	if err := json.Unmarshal(resp.Body(), &body); err == nil {
+	if json.Unmarshal(resp.Body(), &body) == nil {
 		if body.Message != "" {
-			return body.Message
-		}
-		if body.Error != "" {
-			return body.Error
+			message = body.Message
+		} else if body.Error != "" {
+			message = body.Error
 		}
 	}
-	return fmt.Sprintf("HTTP %d", resp.StatusCode())
+	return &APIError{
+		Operation:         operation,
+		StatusCode:        resp.StatusCode(),
+		Message:           message,
+		Code:              body.Error,
+		HasPendingRequest: body.Details.HasPendingRequest,
+	}
 }
 
 func (c *InfisicalClient) ensureSDKClient() {
@@ -146,7 +155,7 @@ func (c *InfisicalClient) ListSigners(token string) ([]signerResponse, error) {
 		return nil, &RequestError{Operation: operation, Err: err}
 	}
 	if resp.IsError() {
-		return nil, NewAPIError(operation, resp.StatusCode(), parseErrorResponse(resp))
+		return nil, newAPIError(operation, resp)
 	}
 
 	return result.Signers, nil
@@ -174,7 +183,7 @@ func (c *InfisicalClient) GetCertificate(token, signerID string) (*certBodyRespo
 		return nil, &RequestError{Operation: operation, Err: err}
 	}
 	if resp.IsError() {
-		return nil, NewAPIError(operation, resp.StatusCode(), parseErrorResponse(resp))
+		return nil, newAPIError(operation, resp)
 	}
 
 	return &certBodyResponse{Certificate: raw.CertificatePem}, nil
@@ -194,17 +203,17 @@ func (c *InfisicalClient) Sign(token, signerID string, req signRequest) (*signRe
 		return nil, &RequestError{Operation: operation, Err: err}
 	}
 	if resp.IsError() {
-		return nil, NewAPIError(operation, resp.StatusCode(), parseErrorResponse(resp))
+		return nil, newAPIError(operation, resp)
 	}
 
 	return &result, nil
 }
 
 type approvalRequest struct {
-	Justification        string `json:"justification"`
-	RequestedSignings    int    `json:"requestedSignings,omitempty"`
-	RequestedWindowStart string `json:"requestedWindowStart,omitempty"`
-	RequestedWindowEnd   string `json:"requestedWindowEnd,omitempty"`
+	Justification           string       `json:"justification"`
+	RequestedSignings       int          `json:"requestedSignings,omitempty"`
+	RequestedWindowDuration string       `json:"requestedWindowDuration,omitempty"`
+	Scope                   signingScope `json:"scope"`
 }
 
 type approvalRequestResponse struct {
@@ -226,7 +235,7 @@ func (c *InfisicalClient) RequestApproval(token, signerID string, req approvalRe
 		return nil, &RequestError{Operation: operation, Err: err}
 	}
 	if resp.IsError() {
-		return nil, NewAPIError(operation, resp.StatusCode(), parseErrorResponse(resp))
+		return nil, newAPIError(operation, resp)
 	}
 
 	return &result, nil
