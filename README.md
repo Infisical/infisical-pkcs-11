@@ -63,7 +63,9 @@ Download the binary for your platform from the [releases page](https://github.co
 | macOS ARM64 | `libinfisical-pkcs11-darwin-arm64.dylib` |
 | Windows x86_64 | `libinfisical-pkcs11-windows-amd64.dll` |
 
-Or build from source (requires Go 1.27.3+ and a C compiler):
+The macOS libraries are built for macOS 12 and later.
+
+Or build from source (requires Go 1.26.10+ and a C compiler):
 
 ```bash
 make build
@@ -490,7 +492,7 @@ Then monitor: `tail -f /tmp/infisical-pkcs11.log`
 
 ## Building from Source
 
-Requires Go 1.27.3+ and a C compiler (GCC or Clang).
+Requires Go 1.26.10+ and a C compiler (GCC or Clang).
 
 ```bash
 # Build for current platform

@@ -1,6 +1,6 @@
 module github.com/Infisical/infisical-pkcs11
 
-go 1.27.3
+go 1.26.10
 
 require (
 	github.com/go-resty/resty/v2 v2.16.5
